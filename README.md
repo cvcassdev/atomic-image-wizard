@@ -5,6 +5,12 @@ A step-by-step graphical wizard for creating custom Fedora Atomic / bootc images
 Designed for users new to atomic desktops who want to customise their system image
 without writing Containerfiles by hand.
 
+> ⚠ **This project is in early testing and is not production ready.**
+> It is being shared to gather feedback across different Fedora Atomic spins and
+> configurations. You should be comfortable using `bootc rollback` and the boot menu
+> to recover from a bad deployment before using this tool. Do not use it as your only
+> method of managing a machine you cannot afford to lose access to.
+
 ![Atomic Image Wizard](screenshot.png)
 
 ---
