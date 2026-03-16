@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 # install.sh — Installer/Uninstaller for Atomic Image Wizard
-# Place this file alongside atomic_image_wizard.py and atomic_image_wizard.svg
-# then run:  bash install.sh
-#        or: bash install.sh --uninstall
+#
+# ── One-liner install (no git required) ──────────────────────────────────────
+#
+#   bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh)
+#
+# ── Traditional install ───────────────────────────────────────────────────────
+#
+#   git clone https://github.com/cvcass-dev/atomic-image-wizard
+#   cd atomic-image-wizard
+#   bash install.sh
+#
+# ── Uninstall ─────────────────────────────────────────────────────────────────
+#
+#   bash install.sh --uninstall
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 set -e
 
+REPO_RAW="https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main"
 BOOTC_DIR="$HOME/bootc"
 SCRIPT_NAME="atomic_image_wizard.py"
 ICON_NAME="atomic_image_wizard.svg"
@@ -35,7 +49,6 @@ if [[ "${1}" == "--uninstall" ]]; then
     echo -e "${RED}╚════════════════════════════════════════╝${NC}"
     echo ""
 
-    # Remove .desktop file
     if [[ -f "$DESKTOP_FILE" ]]; then
         rm "$DESKTOP_FILE"
         success "Removed desktop entry"
@@ -43,7 +56,6 @@ if [[ "${1}" == "--uninstall" ]]; then
         info "Desktop entry not found, skipping."
     fi
 
-    # Remove icon
     if [[ -f "$ICON_DEST" ]]; then
         rm "$ICON_DEST"
         success "Removed icon"
@@ -51,7 +63,6 @@ if [[ "${1}" == "--uninstall" ]]; then
         info "Icon not found, skipping."
     fi
 
-    # Refresh desktop database
     if command -v update-desktop-database &>/dev/null; then
         update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
     fi
@@ -59,7 +70,6 @@ if [[ "${1}" == "--uninstall" ]]; then
         gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
     fi
 
-    # Ask about ~/bootc/ separately since the user's Containerfile lives there
     echo ""
     if [[ -d "$BOOTC_DIR" ]]; then
         read -rp "  Remove ~/bootc/ and all its contents (including any saved Containerfiles)? [y/N] " confirm
@@ -86,6 +96,19 @@ echo -e "${CYAN}║     Atomic Image Wizard  Installer     ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
 echo ""
 
+# ── Detect whether we were invoked via curl (no local files present) ──────────
+
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CURL_MODE=false
+
+if [[ ! -f "$SOURCE_DIR/$SCRIPT_NAME" ]]; then
+    CURL_MODE=true
+    info "Running in download mode — fetching files from GitHub..."
+    if ! command -v curl &>/dev/null; then
+        error "curl is required for one-liner install but was not found."
+    fi
+fi
+
 # ── Check dependencies ────────────────────────────────────────────────────────
 
 info "Checking dependencies..."
@@ -103,7 +126,7 @@ if ! python3 -c "import gi; gi.require_version('Gtk', '4.0'); from gi.repository
     echo ""
     echo "      RUN dnf install -y python3-gobject gtk4 && dnf clean all"
     echo ""
-    echo "  Or if you want to install it temporarily on this session (not persistent on atomic):"
+    echo "  Or to install temporarily on this session (not persistent on atomic):"
     echo ""
     echo "      rpm-ostree install python3-gobject gtk4"
     echo ""
@@ -121,32 +144,38 @@ else
     success "Created $BOOTC_DIR"
 fi
 
-# ── Copy files into ~/bootc/ ──────────────────────────────────────────────────
+# ── Fetch or copy files ───────────────────────────────────────────────────────
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$CURL_MODE" == true ]]; then
+    # Download directly from GitHub into ~/bootc/
+    info "Downloading $SCRIPT_NAME..."
+    curl -fsSL "$REPO_RAW/$SCRIPT_NAME" -o "$BOOTC_DIR/$SCRIPT_NAME" \
+        || error "Failed to download $SCRIPT_NAME"
+    success "Downloaded $SCRIPT_NAME to ~/bootc/"
 
-# Script
-if [[ ! -f "$SOURCE_DIR/$SCRIPT_NAME" ]]; then
-    error "$SCRIPT_NAME not found next to install.sh (expected: $SOURCE_DIR/$SCRIPT_NAME)"
-fi
-
-if [[ "$SOURCE_DIR/$SCRIPT_NAME" != "$BOOTC_DIR/$SCRIPT_NAME" ]]; then
-    cp "$SOURCE_DIR/$SCRIPT_NAME" "$BOOTC_DIR/$SCRIPT_NAME"
-    success "Copied $SCRIPT_NAME to ~/bootc/"
+    info "Downloading $ICON_NAME..."
+    curl -fsSL "$REPO_RAW/$ICON_NAME" -o "$BOOTC_DIR/$ICON_NAME" \
+        || warn "Failed to download $ICON_NAME — launcher will use a fallback system icon."
+    [[ -f "$BOOTC_DIR/$ICON_NAME" ]] && success "Downloaded $ICON_NAME to ~/bootc/"
 else
-    info "$SCRIPT_NAME already in ~/bootc/"
-fi
-
-# Icon
-if [[ -f "$SOURCE_DIR/$ICON_NAME" ]]; then
-    if [[ "$SOURCE_DIR/$ICON_NAME" != "$BOOTC_DIR/$ICON_NAME" ]]; then
-        cp "$SOURCE_DIR/$ICON_NAME" "$BOOTC_DIR/$ICON_NAME"
-        success "Copied $ICON_NAME to ~/bootc/"
+    # Local install — copy from alongside install.sh
+    if [[ "$SOURCE_DIR/$SCRIPT_NAME" != "$BOOTC_DIR/$SCRIPT_NAME" ]]; then
+        cp "$SOURCE_DIR/$SCRIPT_NAME" "$BOOTC_DIR/$SCRIPT_NAME"
+        success "Copied $SCRIPT_NAME to ~/bootc/"
     else
-        info "$ICON_NAME already in ~/bootc/"
+        info "$SCRIPT_NAME already in ~/bootc/"
     fi
-else
-    warn "$ICON_NAME not found — launcher will use a fallback system icon."
+
+    if [[ -f "$SOURCE_DIR/$ICON_NAME" ]]; then
+        if [[ "$SOURCE_DIR/$ICON_NAME" != "$BOOTC_DIR/$ICON_NAME" ]]; then
+            cp "$SOURCE_DIR/$ICON_NAME" "$BOOTC_DIR/$ICON_NAME"
+            success "Copied $ICON_NAME to ~/bootc/"
+        else
+            info "$ICON_NAME already in ~/bootc/"
+        fi
+    else
+        warn "$ICON_NAME not found — launcher will use a fallback system icon."
+    fi
 fi
 
 # ── Make script executable ────────────────────────────────────────────────────
@@ -161,7 +190,6 @@ mkdir -p "$ICON_DIR"
 if [[ -f "$BOOTC_DIR/$ICON_NAME" ]]; then
     cp "$BOOTC_DIR/$ICON_NAME" "$ICON_DEST"
     success "Icon installed to ~/.local/share/icons/"
-
     if command -v gtk-update-icon-cache &>/dev/null; then
         gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
     fi
