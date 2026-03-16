@@ -36,13 +36,13 @@ without writing Containerfiles by hand.
 **One-liner — no git required:**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main/install.sh)
 ```
 
 **Or clone the repo if you prefer:**
 
 ```bash
-git clone https://github.com/cvcass-dev/atomic-image-wizard
+git clone https://github.com/cvcassdev/atomic-image-wizard
 cd atomic-image-wizard
 bash install.sh
 ```
@@ -63,7 +63,7 @@ If it doesn't appear immediately, log out and back in.
 ## Uninstall
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh) --uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main/install.sh) --uninstall
 ```
 
 Or if you still have the repo cloned:
