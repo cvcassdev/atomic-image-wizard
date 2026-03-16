@@ -2812,8 +2812,20 @@ class WizardWindow(Gtk.ApplicationWindow):
 
         sidebar_title = Gtk.Label()
         sidebar_title.set_markup("<b>Steps</b>")
-        sidebar_title.set_margin_bottom(8)
+        sidebar_title.set_margin_bottom(4)
         self.sidebar.append(sidebar_title)
+
+        # Start button — returns to landing page (if present) or Step 1
+        self.start_btn = Gtk.Button(label="⟵  Start")
+        self.start_btn.set_has_frame(False)
+        self.start_btn.set_hexpand(True)
+        self.start_btn.connect("clicked", self._go_start)
+        self.sidebar.append(self.start_btn)
+
+        sep = Gtk.Separator()
+        sep.set_margin_top(4)
+        sep.set_margin_bottom(6)
+        self.sidebar.append(sep)
 
         self.step_btns = []
         for i, (name, num) in enumerate(self.STEPS):
@@ -2859,6 +2871,11 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.current = len(self.pages) - 1
         self._update_ui()
 
+    def _go_start(self, *_):
+        """Return to the landing page if one exists, otherwise go to Step 1."""
+        self.current = self.LANDING_IDX if self._has_landing else self.BASE_IDX
+        self._update_ui()
+
     def _on_step_btn(self, _btn, index):
         # Sidebar buttons use wizard-step indices — offset by 1 if landing present
         target = index + (1 if self._has_landing else 0)
@@ -2891,6 +2908,9 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.sidebar_sep.set_visible(not on_landing)
         self.back_btn.set_visible(not on_landing)
         self.next_btn.set_visible(not on_landing)
+
+        # Start button only makes sense when there is a landing page to go back to
+        self.start_btn.set_visible(self._has_landing)
 
         if on_landing:
             self.step_label.set_markup("<b>Atomic Image Wizard</b>")
