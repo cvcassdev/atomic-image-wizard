@@ -27,7 +27,13 @@ without writing Containerfiles by hand.
 
 ## Installation
 
-Clone the repo and run the installer:
+**One-liner — no git required:**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh)
+```
+
+**Or clone the repo if you prefer:**
 
 ```bash
 git clone https://github.com/cvcass-dev/atomic-image-wizard
@@ -49,6 +55,12 @@ If it doesn't appear immediately, log out and back in.
 ---
 
 ## Uninstall
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh) --uninstall
+```
+
+Or if you still have the repo cloned:
 
 ```bash
 bash install.sh --uninstall
