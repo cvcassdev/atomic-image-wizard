@@ -30,7 +30,7 @@ without writing Containerfiles by hand.
 Clone the repo and run the installer:
 
 ```bash
-git clone https://github.com/yourusername/atomic-image-wizard
+git clone https://github.com/cvcass-dev/atomic-image-wizard
 cd atomic-image-wizard
 bash install.sh
 ```
