@@ -56,25 +56,37 @@ PRESET_REPOS = [
      "-o /etc/yum.repos.d/brave-browser.repo"),
 ]
 
-BASE_PRESETS = [
-    # Fedora 43 - current stable
-    "quay.io/fedora-ostree-desktops/cosmic-atomic:43",
-    "quay.io/fedora/fedora-bootc:43",
-    "quay.io/fedora-ostree-desktops/silverblue:43",
-    "quay.io/fedora-ostree-desktops/kinoite:43",
-    "quay.io/fedora-ostree-desktops/sericea:43",
-    # Fedora 44 - beta
-    "quay.io/fedora-ostree-desktops/cosmic-atomic:44",
-    "quay.io/fedora/fedora-bootc:44",
-    "quay.io/fedora-ostree-desktops/silverblue:44",
-    "quay.io/fedora-ostree-desktops/kinoite:44",
-    # Rawhide - bleeding edge
-    "quay.io/fedora-ostree-desktops/cosmic-atomic:rawhide",
-    "quay.io/fedora/fedora-bootc:rawhide",
-    "quay.io/fedora-ostree-desktops/silverblue:rawhide",
-    # latest tag
-    "quay.io/fedora/fedora-bootc:latest",
+# ── Fedora version constants — update these when a new release ships ──────────
+FEDORA_STABLE  = 43   # current stable release
+FEDORA_NEXT    = 44   # beta / branched — increment alongside stable
+# Rawhide is always "rawhide", no number needed
+
+# Official Fedora Atomic Desktop images — all at quay.io/fedora-ostree-desktops
+# Update this list if Fedora adds or renames a desktop variant
+_ATOMIC_DESKTOPS = [
+    "silverblue",
+    "kinoite",
+    "sway-atomic",
+    "budgie-atomic",
+    "cosmic-atomic",
 ]
+
+def _build_base_presets() -> list[str]:
+    base = "quay.io/fedora-ostree-desktops"
+    bootc = "quay.io/fedora/fedora-bootc"
+    presets = []
+    for tag, label in (
+        (FEDORA_STABLE, f"Fedora {FEDORA_STABLE} — stable"),
+        (FEDORA_NEXT,   f"Fedora {FEDORA_NEXT} — beta"),
+        ("rawhide",     "Rawhide — bleeding edge"),
+    ):
+        for desktop in _ATOMIC_DESKTOPS:
+            presets.append(f"{base}/{desktop}:{tag}")
+        presets.append(f"{bootc}:{tag}")
+    presets.append(f"{bootc}:latest")
+    return presets
+
+BASE_PRESETS = _build_base_presets()
 
 # (label, [packages], requires_rpmfusion_free, requires_rpmfusion_nonfree)
 # ── RPM Fusion: media codecs & hardware acceleration ─────────────────────────
