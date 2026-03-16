@@ -500,6 +500,161 @@ class WizardState:
 
 
 # =============================================================================
+#  PAGE 0 - Landing  (only shown when an existing Containerfile is found)
+# =============================================================================
+class PageLanding(Gtk.Box):
+    def __init__(self, state: WizardState, cf_path: str):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.state   = state
+        self.cf_path = cf_path
+        set_margins(self, top=0, bottom=0, start=0, end=0)
+
+        # Parse immediately so we can show the detected base image
+        parser     = ContainerfileParser(cf_path)
+        self._base = parser.parse_from()
+
+        # ── Vertically centred content ────────────────────────────────────
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.set_vexpand(True)
+        outer.set_hexpand(True)
+
+        top_spacer = Gtk.Box()
+        top_spacer.set_vexpand(True)
+        outer.append(top_spacer)
+
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28)
+        inner.set_halign(Gtk.Align.CENTER)
+        inner.set_valign(Gtk.Align.CENTER)
+        set_margins(inner, top=40, bottom=40, start=60, end=60)
+
+        title = Gtk.Label()
+        title.set_markup("<b><big>Atomic Image Wizard</big></b>")
+        title.set_halign(Gtk.Align.CENTER)
+        inner.append(title)
+
+        found_lbl = Gtk.Label()
+        found_lbl.set_markup(
+            "An existing build was found.\n"
+            f"Base image:  <tt>{GLib.markup_escape_text(self._base or '(unknown)')}</tt>"
+        )
+        found_lbl.set_halign(Gtk.Align.CENTER)
+        found_lbl.add_css_class("dim-label")
+        found_lbl.set_wrap(True)
+        inner.append(found_lbl)
+
+        # ── Option buttons ────────────────────────────────────────────────
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        btn_box.set_halign(Gtk.Align.CENTER)
+
+        def make_option(title_text, subtitle_text):
+            frame = Gtk.Frame()
+            frame.set_size_request(460, -1)
+            frame.add_css_class("card")
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            set_margins(vbox, top=14, bottom=14, start=20, end=20)
+            t = Gtk.Label()
+            t.set_markup(f"<b>{GLib.markup_escape_text(title_text)}</b>")
+            t.set_xalign(0)
+            s = Gtk.Label(label=subtitle_text)
+            s.set_xalign(0)
+            s.add_css_class("dim-label")
+            s.set_wrap(True)
+            vbox.append(t)
+            vbox.append(s)
+            btn = Gtk.Button()
+            btn.set_child(frame)
+            btn.set_has_frame(False)
+            frame.set_child(vbox)
+            return btn
+
+        upgrade_btn = make_option(
+            "Upgrade / Rebuild",
+            "Rebuild the existing image as-is and go to Review before deploying."
+        )
+        upgrade_btn.add_css_class("suggested-action")
+        upgrade_btn.connect("clicked", self._do_upgrade)
+        btn_box.append(upgrade_btn)
+
+        add_btn = make_option(
+            "Add Software",
+            "Load the existing build and jump to Repositories to add or change software."
+        )
+        add_btn.connect("clicked", self._do_add_software)
+        btn_box.append(add_btn)
+
+        new_btn = make_option(
+            "New Build",
+            "Start completely fresh with a new base image and clean settings."
+        )
+        new_btn.add_css_class("destructive-action")
+        new_btn.connect("clicked", self._do_new_build)
+        btn_box.append(new_btn)
+
+        inner.append(btn_box)
+        outer.append(inner)
+
+        bot_spacer = Gtk.Box()
+        bot_spacer.set_vexpand(True)
+        outer.append(bot_spacer)
+
+        self.append(outer)
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _load_containerfile(self):
+        """Parse the Containerfile into state, show warnings if any."""
+        self.state.install_pkgs.clear()
+        self.state.remove_pkgs.clear()
+        self.state.systemd_enable.clear()
+        self.state.systemd_disable.clear()
+        self.state.custom_repos.clear()
+        self.state.copr_repos.clear()
+        self.state.repos.clear()
+        self.state.perf_cachyos_settings = False
+        self.state.perf_ksm_settings     = False
+        self.state.perf_scx_scheds       = False
+
+        parser = ContainerfileParser(self.cf_path)
+        base   = parser.parse_from()
+        parser.apply_to_state(self.state)
+
+        if base:
+            self.state.base_image = base
+
+        if parser.warnings:
+            win = self.get_root()
+            warn_text = "\n".join(f"• {w}" for w in parser.warnings)
+            d = Gtk.MessageDialog(transient_for=win, modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="Containerfile loaded with warnings",
+                secondary_text=warn_text)
+            d.connect("response", lambda d, _: d.close())
+            d.present()
+
+    # ── Button handlers ───────────────────────────────────────────────────
+
+    def _do_upgrade(self, *_):
+        self._load_containerfile()
+        win = self.get_root()
+        if hasattr(win, "jump_to_page"):
+            win.jump_to_page(win.REVIEW_IDX)
+
+    def _do_add_software(self, *_):
+        self._load_containerfile()
+        win = self.get_root()
+        if hasattr(win, "jump_to_page"):
+            win.jump_to_page(win.REPOS_IDX)
+
+    def _do_new_build(self, *_):
+        # Clear state and go to base image selector
+        self.state.__init__()
+        win = self.get_root()
+        if hasattr(win, "jump_to_page"):
+            win.jump_to_page(win.BASE_IDX)
+
+
+# =============================================================================
 #  PAGE 1 - Base Image
 # =============================================================================
 class PageBase(Gtk.Box):
@@ -512,28 +667,6 @@ class PageBase(Gtk.Box):
             "Step 1 — Choose Base Image",
             "Select the starting point for your custom image."
         ))
-
-        # ── Load existing Containerfile if present ────────────────────────
-        cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
-        if os.path.exists(cf_path):
-            parser = ContainerfileParser(cf_path)
-            existing_base = parser.parse_from()
-            load_frame = Gtk.Frame(label=f" Existing Containerfile found: {cf_path} ")
-            load_box = Gtk.Box(spacing=10)
-            set_margins(load_box, top=8, bottom=8, start=10, end=10)
-            found_lbl = Gtk.Label()
-            found_lbl.set_markup(
-                f"Detected base image: <b>{GLib.markup_escape_text(existing_base or '(unknown)')}</b>"
-            )
-            found_lbl.set_xalign(0)
-            found_lbl.set_hexpand(True)
-            load_btn = Gtk.Button(label="Load as starting point")
-            load_btn.add_css_class("suggested-action")
-            load_btn.connect("clicked", self._load_existing, cf_path)
-            load_box.append(found_lbl)
-            load_box.append(load_btn)
-            load_frame.set_child(load_box)
-            self.append(load_frame)
 
         self.dropdown = Gtk.DropDown.new_from_strings(BASE_PRESETS)
         self.dropdown.set_selected(0)
@@ -587,103 +720,6 @@ class PageBase(Gtk.Box):
         self._pending_repos    = []
         self._pending_custom   = []
         self._pending_pkgs     = []
-
-    # ── Containerfile loading ─────────────────────────────────────────────
-
-    def _load_existing(self, _btn, cf_path: str):
-        # Reset state
-        self.state.install_pkgs.clear()
-        self.state.remove_pkgs.clear()
-        self.state.systemd_enable.clear()
-        self.state.systemd_disable.clear()
-        self.state.custom_repos.clear()
-        self.state.copr_repos.clear()
-        self.state.repos.clear()
-        self.state.perf_cachyos_settings = False
-        self.state.perf_ksm_settings     = False
-        self.state.perf_scx_scheds       = False
-
-        parser = ContainerfileParser(cf_path)
-        base   = parser.parse_from()
-        parser.apply_to_state(self.state)
-
-        if base:
-            self.state.base_image = base
-            self.entry.set_text(base)
-            self._refresh_preview()
-
-        self.on_enter()
-
-        # Show parser warnings if any
-        if parser.warnings:
-            win = self.get_root()
-            warn_text = "The following issues were found while loading the Containerfile:\n\n"
-            warn_text += "\n".join(f"• {w}" for w in parser.warnings)
-            d = Gtk.MessageDialog(transient_for=win, modal=True,
-                message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.OK,
-                text="Containerfile loaded with warnings",
-                secondary_text=warn_text)
-            d.connect("response", lambda d, _: d.close())
-            d.present()
-
-        self._show_loaded_dialog(base or self.state.base_image, parser.warnings)
-
-    def _show_loaded_dialog(self, base: str, warnings: list):
-        win = self.get_root()
-        dlg = Gtk.Window(title="Containerfile Loaded", modal=True, transient_for=win)
-        dlg.set_default_size(460, 220)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-        set_margins(box, top=24, bottom=24, start=24, end=24)
-
-        warn_note = (
-            f"\n⚠ {len(warnings)} warning(s) — check the dialog that appeared."
-            if warnings else ""
-        )
-        summary_lbl = Gtk.Label()
-        summary_lbl.set_markup(
-            "<b>Containerfile loaded successfully.</b>\n"
-            f"Base: <tt>{GLib.markup_escape_text(base)}</tt>\n"
-            f"Install: {len(self.state.install_pkgs)} pkg(s)  |  "
-            f"Remove: {len(self.state.remove_pkgs)} pkg(s)  |  "
-            f"Custom repos: {len(self.state.custom_repos) + len(self.state.copr_repos)}  |  "
-            f"Services: {len(self.state.systemd_enable) + len(self.state.systemd_disable)}"
-            + GLib.markup_escape_text(warn_note)
-        )
-        summary_lbl.set_xalign(0)
-        summary_lbl.set_wrap(True)
-        box.append(summary_lbl)
-
-        box.append(Gtk.Label(label="What would you like to do?"))
-
-        btn_box = Gtk.Box(spacing=12)
-        btn_box.set_halign(Gtk.Align.CENTER)
-
-        rebuild_btn = Gtk.Button(label="Rebuild / Upgrade as-is")
-        rebuild_btn.add_css_class("suggested-action")
-        rebuild_btn.connect("clicked", self._loaded_rebuild, dlg)
-
-        modify_btn = Gtk.Button(label="Review / modify first")
-        modify_btn.connect("clicked", self._loaded_modify, dlg)
-
-        btn_box.append(rebuild_btn)
-        btn_box.append(modify_btn)
-        box.append(btn_box)
-        dlg.set_child(box)
-        dlg.present()
-
-    def _loaded_rebuild(self, _btn, dlg):
-        dlg.close()
-        win = self.get_root()
-        if hasattr(win, "jump_to_page"):
-            win.jump_to_page(5)
-
-    def _loaded_modify(self, _btn, dlg):
-        dlg.close()
-        win = self.get_root()
-        if hasattr(win, "jump_to_page"):
-            win.jump_to_page(1)
 
     # ── Dropdown / entry ──────────────────────────────────────────────────
 
@@ -2714,13 +2750,18 @@ class WizardWindow(Gtk.ApplicationWindow):
         super().__init__(application=app, title="Atomic Image Wizard")
         self.set_default_size(1100, 800)
         self.maximize()
-        self.current = 0
-        self.state   = WizardState()
+        self.state = WizardState()
+
+        # ── Detect existing Containerfile ─────────────────────────────────
+        cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
+        self._has_landing = os.path.exists(cf_path)
 
         page_build  = PageBuild(self.state, app)
         page_review = PageReview(self.state, page_build)
-        self.pages  = [
-            PageBase(self.state),
+
+        # Wizard pages — indices are stable regardless of landing presence
+        wizard_pages = [
+            PageBase(self.state),        # 0 in wizard = index BASE_IDX overall
             PageRepos(self.state),
             PagePackages(self.state),
             PagePerformance(self.state),
@@ -2729,6 +2770,22 @@ class WizardWindow(Gtk.ApplicationWindow):
             page_build,
         ]
 
+        if self._has_landing:
+            self.pages = [PageLanding(self.state, cf_path)] + wizard_pages
+            self.LANDING_IDX = 0
+            self.BASE_IDX    = 1
+            self.REPOS_IDX   = 2
+            self.REVIEW_IDX  = 6
+            self.current     = 0   # start on landing page
+        else:
+            self.pages       = wizard_pages
+            self.LANDING_IDX = None
+            self.BASE_IDX    = 0
+            self.REPOS_IDX   = 1
+            self.REVIEW_IDX  = 5
+            self.current     = 0   # start on base image page
+
+        # ── Header bar ────────────────────────────────────────────────────
         hb = Gtk.HeaderBar()
         self.step_label = Gtk.Label()
         self.step_label.set_markup("<b>Atomic Image Wizard</b>")
@@ -2742,19 +2799,21 @@ class WizardWindow(Gtk.ApplicationWindow):
         hb.pack_end(self.next_btn)
         self.set_titlebar(hb)
 
+        # ── Root layout ───────────────────────────────────────────────────
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.set_child(root)
 
-        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        sidebar.set_size_request(185, -1)
-        sidebar.set_hexpand(False)
-        sidebar.set_vexpand(True)
-        set_margins(sidebar, top=12, bottom=12, start=8, end=8)
+        # Sidebar — hidden on landing page
+        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.sidebar.set_size_request(185, -1)
+        self.sidebar.set_hexpand(False)
+        self.sidebar.set_vexpand(True)
+        set_margins(self.sidebar, top=12, bottom=12, start=8, end=8)
 
         sidebar_title = Gtk.Label()
         sidebar_title.set_markup("<b>Steps</b>")
         sidebar_title.set_margin_bottom(8)
-        sidebar.append(sidebar_title)
+        self.sidebar.append(sidebar_title)
 
         self.step_btns = []
         for i, (name, num) in enumerate(self.STEPS):
@@ -2762,11 +2821,12 @@ class WizardWindow(Gtk.ApplicationWindow):
             btn.set_has_frame(False)
             btn.set_hexpand(True)
             btn.connect("clicked", self._on_step_btn, i)
-            sidebar.append(btn)
+            self.sidebar.append(btn)
             self.step_btns.append(btn)
 
-        root.append(sidebar)
-        root.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self.sidebar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        root.append(self.sidebar)
+        root.append(self.sidebar_sep)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.set_hexpand(True)
@@ -2787,7 +2847,6 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.outer_scroll.set_child(self.stack)
         content.append(self.outer_scroll)
 
-        # Give PageBuild a reference so it can auto-scroll the whole page
         page_build._outer_scroll = self.outer_scroll
 
         self._update_ui()
@@ -2801,7 +2860,9 @@ class WizardWindow(Gtk.ApplicationWindow):
         self._update_ui()
 
     def _on_step_btn(self, _btn, index):
-        self.current = index
+        # Sidebar buttons use wizard-step indices — offset by 1 if landing present
+        target = index + (1 if self._has_landing else 0)
+        self.current = target
         self._update_ui()
 
     def _go_back(self, *_):
@@ -2823,12 +2884,26 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.stack.set_visible_child_name(str(self.current))
         self.outer_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
 
-        name = self.STEPS[self.current][0]
-        num  = self.STEPS[self.current][1]
+        on_landing = self._has_landing and self.current == self.LANDING_IDX
+
+        # Hide sidebar and nav buttons on the landing page
+        self.sidebar.set_visible(not on_landing)
+        self.sidebar_sep.set_visible(not on_landing)
+        self.back_btn.set_visible(not on_landing)
+        self.next_btn.set_visible(not on_landing)
+
+        if on_landing:
+            self.step_label.set_markup("<b>Atomic Image Wizard</b>")
+            return
+
+        # Work out which wizard step we're on (0-based within wizard pages)
+        wizard_idx = self.current - (1 if self._has_landing else 0)
+        name = self.STEPS[wizard_idx][0]
+        num  = self.STEPS[wizard_idx][1]
         self.step_label.set_markup(
             f"<b>Atomic Image Wizard</b>  —  Step {num}: {GLib.markup_escape_text(name)}"
         )
-        self.back_btn.set_sensitive(self.current > 0)
+        self.back_btn.set_sensitive(self.current > (1 if self._has_landing else 0))
 
         review_idx = len(self.pages) - 2
         build_idx  = len(self.pages) - 1
@@ -2839,7 +2914,7 @@ class WizardWindow(Gtk.ApplicationWindow):
             self.next_btn.set_sensitive(True)
 
         for i, btn in enumerate(self.step_btns):
-            if i == self.current:
+            if i == wizard_idx:
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
