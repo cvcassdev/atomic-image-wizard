@@ -7,7 +7,7 @@
 #
 # ── Traditional install ───────────────────────────────────────────────────────
 #
-#   git clone https://github.com/cvcass-dev/atomic-image-wizard
+#   git clone https://github.com/cvcassdev/atomic-image-wizard
 #   cd atomic-image-wizard
 #   bash install.sh
 #
