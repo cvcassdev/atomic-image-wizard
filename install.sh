@@ -19,7 +19,7 @@
 
 set -e
 
-REPO_RAW="https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main"
+REPO_RAW="https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main"
 BOOTC_DIR="$HOME/bootc"
 SCRIPT_NAME="atomic_image_wizard.py"
 ICON_NAME="atomic_image_wizard.svg"
