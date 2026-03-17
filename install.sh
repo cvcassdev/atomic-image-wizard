@@ -3,7 +3,7 @@
 #
 # ── One-liner install (no git required) ──────────────────────────────────────
 #
-#   bash <(curl -fsSL https://raw.githubusercontent.com/cvcass-dev/atomic-image-wizard/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main/install.sh)
 #
 # ── Traditional install ───────────────────────────────────────────────────────
 #
