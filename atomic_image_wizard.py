@@ -2457,30 +2457,24 @@ class PageBuild(Gtk.Box):
             display.get_clipboard().set(text)
 
     def start_build(self, tag: str):
-        import shutil
         self.deploy_btn.set_visible(False)
         self.log_buffer.set_text("")
 
         path = os.path.join(SCRIPT_DIR, "Containerfile")
-        if shutil.which("pkexec"):
-            build_cmd = ["pkexec", "podman", "build", "--pull", "-t", tag, "-f", path, SCRIPT_DIR]
-        else:
-            build_cmd = ["sudo", "podman", "build", "--pull", "-t", tag, "-f", path, SCRIPT_DIR]
+        # Rootless podman build — no pkexec or sudo needed for the build itself.
+        # Privilege escalation is only required for bootc deploy, handled separately.
+        build_cmd = ["podman", "build", "--pull", "--format=oci", "-t", tag, "-f", path, SCRIPT_DIR]
 
         self._log(f"Building:  {' '.join(build_cmd)}\n\n")
-        self._set_status("Authenticating — please respond to the password prompt…", spinning=True)
+        self._set_status("Building…", spinning=True)
 
         def worker():
             try:
-                first_output = True
                 proc = subprocess.Popen(
                     build_cmd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
                 for line in proc.stdout:
-                    if first_output:
-                        GLib.idle_add(self._set_status, "Building…", True)
-                        first_output = False
                     GLib.idle_add(self._log, line)
                 proc.wait()
                 if proc.returncode == 0:
