@@ -2701,9 +2701,14 @@ class PageBuild(Gtk.Box):
 
                 GLib.idle_add(stop_pull_ticker)
                 if proc.returncode == 0:
-                    GLib.idle_add(self._log, f"\n{success_msg}\n")
-                    GLib.idle_add(self._set_status, success_msg)
-                    GLib.idle_add(self._offer_reboot)
+                    if "No update available" in full_output:
+                        GLib.idle_add(self._log, "\nNo update available — image is already up to date.\n")
+                        GLib.idle_add(self._set_status, "No update available.")
+                        GLib.idle_add(self._offer_exit)
+                    else:
+                        GLib.idle_add(self._log, f"\n{success_msg}\n")
+                        GLib.idle_add(self._set_status, success_msg)
+                        GLib.idle_add(self._offer_reboot)
                 else:
                     GLib.idle_add(self._log, f"\nCommand failed (exit {proc.returncode})\n")
                     GLib.idle_add(self._set_status, f"Failed (exit {proc.returncode})")
@@ -2726,6 +2731,25 @@ class PageBuild(Gtk.Box):
             d.close()
             if response == Gtk.ResponseType.YES:
                 subprocess.Popen(["systemctl", "reboot"])
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _offer_exit(self):
+        win = self.get_root()
+        dlg = Gtk.MessageDialog(
+            transient_for=win, modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="No update available",
+            secondary_text=(
+                "Your image is already up to date — no changes were staged.\n\n"
+                "Close the wizard?"
+            )
+        )
+        def on_response(d, response):
+            d.close()
+            if response == Gtk.ResponseType.YES:
+                win.close()
         dlg.connect("response", on_response)
         dlg.present()
 
