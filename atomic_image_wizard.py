@@ -61,7 +61,8 @@ FEDORA_STABLE  = 43   # current stable release
 FEDORA_NEXT    = 44   # beta / branched — increment alongside stable
 # Rawhide is always "rawhide", no number needed
 
-# Official Fedora Atomic Desktop images — all at quay.io/fedora-ostree-desktops
+# Service name used by scx-scheds — normalised to one constant everywhere
+SCX_SERVICE = "scx_loader.service"
 # Update this list if Fedora adds or renames a desktop variant
 _ATOMIC_DESKTOPS = [
     "silverblue",
@@ -305,8 +306,8 @@ class ContainerfileParser:
                 if token in self.PERF_PKG_FLAGS:
                     flag = self.PERF_PKG_FLAGS[token]
                     setattr(state, flag, True)
-                    if flag == "perf_scx_scheds" and "scx_loader.service" not in state.systemd_enable:
-                        state.systemd_enable.append("scx_loader.service")
+                    if flag == "perf_scx_scheds" and SCX_SERVICE not in state.systemd_enable:
+                        state.systemd_enable.append(SCX_SERVICE)
                 elif token not in state.install_pkgs:
                     state.install_pkgs.append(token)
             return True
@@ -379,7 +380,11 @@ class WizardState:
 
     def _fedora_ver(self) -> str:
         m = re.search(r":(\d+)$", self.base_image)
-        return m.group(1) if m else "43"
+        if m:
+            return m.group(1)
+        if "rawhide" in self.base_image.lower():
+            return str(FEDORA_STABLE)   # RPM Fusion has no rawhide release, use stable
+        return str(FEDORA_STABLE)       # fallback
 
     def generate_containerfile(self) -> str:
         DIVIDER = "# " + "\u2500" * 62
@@ -391,7 +396,6 @@ class WizardState:
         out = [f"FROM {self.base_image}"]
 
         PERF_PKGS = {"cachyos-settings", "cachyos-ksm-settings", "scx-scheds", "scx-tools"}
-        SCX_SVCS  = {"scx", "scx.service", "scx_loader", "scx_loader.service"}
 
         # ── Section 1: Repositories ───────────────────────────────────────
         repo_parts = []
@@ -474,10 +478,10 @@ class WizardState:
             out.append("RUN " + " \\\n    && ".join(perf_parts))
 
         # ── Section 4: Enable / disable services ──────────────────────────
-        enable  = [s for s in self.systemd_enable if s not in SCX_SVCS]
+        enable  = [s for s in self.systemd_enable if s != SCX_SERVICE]
         disable = list(self.systemd_disable)
         if self.perf_scx_scheds:
-            enable.append("scx_loader.service")
+            enable.append(SCX_SERVICE)
 
         cleanup = []
         if not self.perf_scx_scheds:
@@ -504,7 +508,7 @@ class WizardState:
             issues.append("No base image specified (Step 1).")
         if not self.image_tag.strip():
             issues.append("No image tag specified (Review page).")
-        if self.perf_scx_scheds and "scx_loader.service" not in self.systemd_enable:
+        if self.perf_scx_scheds and SCX_SERVICE not in self.systemd_enable:
             issues.append(
                 "SCX scheduler is enabled but scx_loader.service is not in the enable list."
             )
@@ -2011,16 +2015,15 @@ class PagePerformance(Gtk.Box):
 
     def _apply_tweak(self, attr, state):
         setattr(self.state, attr, state)
-        SCX_SVCS = {"scx", "scx.service", "scx_loader", "scx_loader.service"}
         if attr == "perf_scx_scheds":
             if state:
                 if "ananicy-cpp" in self.state.install_pkgs:
                     self.state.install_pkgs.remove("ananicy-cpp")
-                if "scx_loader.service" not in self.state.systemd_enable:
-                    self.state.systemd_enable.append("scx_loader.service")
+                if SCX_SERVICE not in self.state.systemd_enable:
+                    self.state.systemd_enable.append(SCX_SERVICE)
             else:
                 self.state.systemd_enable = [
-                    s for s in self.state.systemd_enable if s not in SCX_SVCS
+                    s for s in self.state.systemd_enable if s != SCX_SERVICE
                 ]
 
     def on_enter(self):
@@ -2116,13 +2119,12 @@ class PageSystemd(Gtk.Box):
         self.state.systemd_disable = self._buf_lines(self.dis_buffer)
 
     def _auto_enable_services(self):
-        SCX_SVCS = {"scx", "scx.service", "scx_loader", "scx_loader.service"}
         for pkg in self.state.install_pkgs:
             pkg_lower = pkg.lower()
             for fragment, svcs in self.PKG_SERVICE_MAP.items():
                 if fragment in pkg_lower:
                     for svc in svcs:
-                        if svc not in self.state.systemd_enable and svc not in SCX_SVCS:
+                        if svc not in self.state.systemd_enable and svc != SCX_SERVICE:
                             self.state.systemd_enable.append(svc)
 
     def on_enter(self):
@@ -2461,9 +2463,16 @@ class PageBuild(Gtk.Box):
         self.log_buffer.set_text("")
 
         path = os.path.join(SCRIPT_DIR, "Containerfile")
-        # Rootless podman build — no pkexec or sudo needed for the build itself.
-        # Privilege escalation is only required for bootc deploy, handled separately.
-        build_cmd = ["podman", "build", "--pull", "--format=oci", "-t", tag, "-f", path, SCRIPT_DIR]
+        # Rootless build — no privilege escalation needed.
+        # Context is "." so any extra files alongside the Containerfile are available.
+        build_cmd = [
+            "podman", "build",
+            "--pull",
+            "--format=oci",
+            "-t", tag,
+            "-f", path,
+            "."
+        ]
 
         self._log(f"Building:  {' '.join(build_cmd)}\n\n")
         self._set_status("Building…", spinning=True)
@@ -2480,11 +2489,69 @@ class PageBuild(Gtk.Box):
                 if proc.returncode == 0:
                     GLib.idle_add(self._build_success, tag)
                 else:
-                    GLib.idle_add(self._log, f"\nBuild failed (exit {proc.returncode})\n")
+                    GLib.idle_add(self._log, f"\nRootless build failed (exit {proc.returncode})\n")
                     GLib.idle_add(self._set_status, f"Build failed (exit {proc.returncode})")
+                    GLib.idle_add(self._suggest_rootful_fallback, tag)
             except FileNotFoundError:
                 GLib.idle_add(self._log, "\npodman not found. Is it installed?\n")
                 GLib.idle_add(self._set_status, "Error: podman not found")
+            except Exception as e:
+                GLib.idle_add(self._log, f"\nError: {e}\n")
+                GLib.idle_add(self._set_status, f"Error: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _suggest_rootful_fallback(self, tag: str):
+        win = self.get_root()
+        dlg = Gtk.MessageDialog(
+            transient_for=win, modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Rootless build failed",
+            secondary_text=(
+                "Rootless podman builds occasionally fail on Fedora Atomic due to "
+                "SELinux labelling or storage driver issues.\n\n"
+                "You can try fixing it with:\n"
+                "  restorecon -R -F -v ~/.local/share/containers\n\n"
+                "Or retry using a privileged build now (requires password)?"
+            )
+        )
+        def on_response(d, resp):
+            d.close()
+            if resp == Gtk.ResponseType.YES:
+                self._try_rootful_build(tag)
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _try_rootful_build(self, tag: str):
+        import shutil
+        path = os.path.join(SCRIPT_DIR, "Containerfile")
+        prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
+        build_cmd = prefix + [
+            "podman", "build", "--pull", "--format=oci",
+            "-t", tag, "-f", path, "."
+        ]
+        self._log(f"\nRetrying as privileged build:\n  {' '.join(build_cmd)}\n\n")
+        self._set_status("Authenticating — please respond to the password prompt…", spinning=True)
+
+        def worker():
+            try:
+                first_output = True
+                proc = subprocess.Popen(
+                    build_cmd,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                )
+                for line in proc.stdout:
+                    if first_output:
+                        GLib.idle_add(self._set_status, "Building (privileged)…", True)
+                        first_output = False
+                    GLib.idle_add(self._log, line)
+                proc.wait()
+                if proc.returncode == 0:
+                    GLib.idle_add(self._build_success, tag)
+                else:
+                    GLib.idle_add(self._log, f"\nPrivileged build also failed (exit {proc.returncode})\n")
+                    GLib.idle_add(self._set_status, f"Build failed (exit {proc.returncode})")
             except Exception as e:
                 GLib.idle_add(self._log, f"\nError: {e}\n")
                 GLib.idle_add(self._set_status, f"Error: {e}")
