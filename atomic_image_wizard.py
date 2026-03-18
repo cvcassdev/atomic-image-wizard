@@ -1509,7 +1509,7 @@ class PagePackages(Gtk.Box):
                 out = subprocess.check_output(
                     ["dnf5", "repoquery"] + cache_flag + [
                         "--queryformat",
-                        "%{name}\t%{version}-%{release}\t%{reponame}\t%{summary}\n",
+                        r"%{name}\t%{version}-%{release}\t%{reponame}\t%{summary}\n",
                         query],
                     text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
                 )
@@ -1720,9 +1720,8 @@ class PagePackages(Gtk.Box):
         row_box.append(chk)
         row_box.append(name_lbl)
         row_box.append(sum_lbl)
-        # Store handler id for safe block/unblock
-        hid = chk.connect("toggled", on_toggle, pkg_key)
-        chk.set_data("handler_id", hid)
+        # Store handler id as a plain Python attribute for safe block/unblock
+        chk._handler_id = chk.connect("toggled", on_toggle, pkg_key)
         return row_box
 
     def _make_version_row(self, name, ver, repo, summary, checked, chk_label, on_toggle, pkg_key):
@@ -1752,8 +1751,7 @@ class PagePackages(Gtk.Box):
         row_box.append(ver_lbl)
         row_box.append(repo_lbl)
         row_box.append(sum_lbl)
-        hid = chk.connect("toggled", on_toggle, pkg_key)
-        chk.set_data("handler_id", hid)
+        chk._handler_id = chk.connect("toggled", on_toggle, pkg_key)
         return row_box
 
     def _on_install_toggled(self, chk, name: str):
@@ -1823,7 +1821,7 @@ class PagePackages(Gtk.Box):
                     name_widget = first.get_next_sibling()
                     if name_widget and hasattr(name_widget, "get_label"):
                         if name_widget.get_label() == pkg:
-                            hid = first.get_data("handler_id")
+                            hid = getattr(first, "_handler_id", None)
                             if hid:
                                 first.handler_block(hid)
                             first.set_active(False)
@@ -1868,7 +1866,7 @@ class PagePackages(Gtk.Box):
                         name_widget = first.get_next_sibling()
                         if name_widget and hasattr(name_widget, "get_label"):
                             pkg = name_widget.get_label()
-                            hid = first.get_data("handler_id")
+                            hid = getattr(first, "_handler_id", None)
                             if hid:
                                 first.handler_block(hid)
                             first.set_active(pkg in pkg_list)
