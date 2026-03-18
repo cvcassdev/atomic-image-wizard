@@ -1503,12 +1503,13 @@ class PagePackages(Gtk.Box):
         last_error = ""
 
         # Try dnf5 repoquery first (most detailed output)
+        # Note: queryformat uses real tab/newline characters, NOT raw string
         for cache_flag in (["--cacheonly"], []):
             try:
                 out = subprocess.check_output(
                     ["dnf5", "repoquery"] + cache_flag + [
                         "--queryformat",
-                        r"%{name}\t%{version}-%{release}\t%{reponame}\t%{summary}\n",
+                        "%{name}\t%{version}-%{release}\t%{reponame}\t%{summary}\n",
                         query],
                     text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
                 )
@@ -1540,11 +1541,12 @@ class PagePackages(Gtk.Box):
                         cmd, text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
                     )
                     for line in out.splitlines():
-                        line = line.strip()
+                        line = line.strip()   # strips leading space from dnf5 output
                         if not line or line.startswith("Matched fields"):
                             continue
                         if "\t" in line:
                             pkg, _, summary = line.partition("\t")
+                            # strip arch suffix e.g. firefox.x86_64 → firefox
                             name = re.sub(r"\.(noarch|x86_64|i686|aarch64)$", "", pkg.strip())
                             raw.append((name.strip(), "", "", summary.strip()))
                         else:
