@@ -2465,10 +2465,11 @@ class PageBuild(Gtk.Box):
 
         path = os.path.join(SCRIPT_DIR, "Containerfile")
         prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
+        # --pull checks upstream for FROM image changes.
+        # No --no-cache so podman reuses cached layers when nothing has changed.
         build_cmd = prefix + [
             "podman", "build",
             "--pull",
-            "--no-cache",
             "--format=oci",
             "-t", tag,
             "-f", path,
