@@ -2285,7 +2285,7 @@ class PageBuild(Gtk.Box):
         self.app            = app
         self._pull_timer_id = None
         self._pull_start    = None
-        self._outer_scroll  = None   # set by WizardWindow after construction
+        self._outer_scroll  = None
         set_margins(self, top=12, bottom=12, start=16, end=16)
 
         self.log_frame = Gtk.Frame(label=" Output Log ")
@@ -2459,15 +2459,16 @@ class PageBuild(Gtk.Box):
             display.get_clipboard().set(text)
 
     def start_build(self, tag: str):
+        import shutil
         self.deploy_btn.set_visible(False)
         self.log_buffer.set_text("")
 
         path = os.path.join(SCRIPT_DIR, "Containerfile")
-        # Rootless build — no privilege escalation needed.
-        # Context is "." so any extra files alongside the Containerfile are available.
-        build_cmd = [
+        prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
+        build_cmd = prefix + [
             "podman", "build",
             "--pull",
+            "--no-cache",
             "--format=oci",
             "-t", tag,
             "-f", path,
@@ -2475,63 +2476,6 @@ class PageBuild(Gtk.Box):
         ]
 
         self._log(f"Building:  {' '.join(build_cmd)}\n\n")
-        self._set_status("Building…", spinning=True)
-
-        def worker():
-            try:
-                proc = subprocess.Popen(
-                    build_cmd,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                )
-                for line in proc.stdout:
-                    GLib.idle_add(self._log, line)
-                proc.wait()
-                if proc.returncode == 0:
-                    GLib.idle_add(self._build_success, tag)
-                else:
-                    GLib.idle_add(self._log, f"\nRootless build failed (exit {proc.returncode})\n")
-                    GLib.idle_add(self._set_status, f"Build failed (exit {proc.returncode})")
-                    GLib.idle_add(self._suggest_rootful_fallback, tag)
-            except FileNotFoundError:
-                GLib.idle_add(self._log, "\npodman not found. Is it installed?\n")
-                GLib.idle_add(self._set_status, "Error: podman not found")
-            except Exception as e:
-                GLib.idle_add(self._log, f"\nError: {e}\n")
-                GLib.idle_add(self._set_status, f"Error: {e}")
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _suggest_rootful_fallback(self, tag: str):
-        win = self.get_root()
-        dlg = Gtk.MessageDialog(
-            transient_for=win, modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="Rootless build failed",
-            secondary_text=(
-                "Rootless podman builds occasionally fail on Fedora Atomic due to "
-                "SELinux labelling or storage driver issues.\n\n"
-                "You can try fixing it with:\n"
-                "  restorecon -R -F -v ~/.local/share/containers\n\n"
-                "Or retry using a privileged build now (requires password)?"
-            )
-        )
-        def on_response(d, resp):
-            d.close()
-            if resp == Gtk.ResponseType.YES:
-                self._try_rootful_build(tag)
-        dlg.connect("response", on_response)
-        dlg.present()
-
-    def _try_rootful_build(self, tag: str):
-        import shutil
-        path = os.path.join(SCRIPT_DIR, "Containerfile")
-        prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
-        build_cmd = prefix + [
-            "podman", "build", "--pull", "--format=oci",
-            "-t", tag, "-f", path, "."
-        ]
-        self._log(f"\nRetrying as privileged build:\n  {' '.join(build_cmd)}\n\n")
         self._set_status("Authenticating — please respond to the password prompt…", spinning=True)
 
         def worker():
@@ -2543,15 +2487,18 @@ class PageBuild(Gtk.Box):
                 )
                 for line in proc.stdout:
                     if first_output:
-                        GLib.idle_add(self._set_status, "Building (privileged)…", True)
+                        GLib.idle_add(self._set_status, "Building…", True)
                         first_output = False
                     GLib.idle_add(self._log, line)
                 proc.wait()
                 if proc.returncode == 0:
                     GLib.idle_add(self._build_success, tag)
                 else:
-                    GLib.idle_add(self._log, f"\nPrivileged build also failed (exit {proc.returncode})\n")
+                    GLib.idle_add(self._log, f"\nBuild failed (exit {proc.returncode})\n")
                     GLib.idle_add(self._set_status, f"Build failed (exit {proc.returncode})")
+            except FileNotFoundError:
+                GLib.idle_add(self._log, "\npodman not found. Is it installed?\n")
+                GLib.idle_add(self._set_status, "Error: podman not found")
             except Exception as e:
                 GLib.idle_add(self._log, f"\nError: {e}\n")
                 GLib.idle_add(self._set_status, f"Error: {e}")
@@ -2564,7 +2511,7 @@ class PageBuild(Gtk.Box):
         threading.Thread(target=self._inspect_image_async, args=(tag,), daemon=True).start()
 
     def _inspect_image_async(self, tag: str):
-        """Run podman image inspect and surface size/layers/date in the log."""
+        """Run podman image inspect — surface size/layers/date and capture the digest."""
         try:
             import json
             out = subprocess.check_output(
@@ -2573,8 +2520,8 @@ class PageBuild(Gtk.Box):
             )
             data = json.loads(out)
             if data:
-                info   = data[0]
-                size   = info.get("Size", 0)
+                info    = data[0]
+                size    = info.get("Size", 0)
                 size_mb = f"{size / 1_048_576:.1f} MB"
                 layers  = len(info.get("RootFS", {}).get("Layers", []))
                 created = info.get("Created", "unknown")[:19].replace("T", " ")
@@ -2587,7 +2534,7 @@ class PageBuild(Gtk.Box):
                 )
                 GLib.idle_add(self._log, summary)
         except Exception:
-            pass   # inspect failure is non-fatal
+            pass
         GLib.idle_add(self._finish_build_success, tag)
 
     def _finish_build_success(self, tag: str):
@@ -2598,9 +2545,8 @@ class PageBuild(Gtk.Box):
         tag = self.state.image_tag or "localhost/atomic-custom:latest"
         win = self.get_root()
 
-        # Explicit confirmation dialog with clear consequence language
         dlg = Gtk.Window(title="Deploy Image", modal=True, transient_for=win)
-        dlg.set_default_size(520, 320)
+        dlg.set_default_size(520, 340)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         set_margins(outer, top=24, bottom=24, start=24, end=24)
@@ -2618,12 +2564,12 @@ class PageBuild(Gtk.Box):
         desc_lbl = Gtk.Label()
         desc_lbl.set_markup(
             f"Image: <tt>{GLib.markup_escape_text(tag)}</tt>\n\n"
-            "<b>Upgrade</b> — the image tag is already deployed; stage the new build as an update.\n"
+            "<b>Upgrade</b> — image tag is already deployed; stage the new build as an update.\n"
             "  <tt>sudo bootc upgrade</tt>\n\n"
             "<b>Switch</b> — first time deploying this tag, or changing to a new one.\n"
             f"  <tt>sudo bootc switch --transport containers-storage {GLib.markup_escape_text(tag)}</tt>\n\n"
             "⚠  <b>A reboot is required to apply the change.</b>\n"
-            "Your previous deployment is kept as a rollback — you can return to it with\n"
+            "Your previous deployment is kept as a rollback — return to it with\n"
             "<tt>sudo bootc rollback</tt> or by selecting it in the boot menu.\n"
             "<b>Keep at least one known-good deployment before deploying to a production machine.</b>"
         )
@@ -2754,14 +2700,9 @@ class PageBuild(Gtk.Box):
 
                 GLib.idle_add(stop_pull_ticker)
                 if proc.returncode == 0:
-                    if "No update available." in full_output:
-                        msg = "No update available — image is already up to date."
-                        GLib.idle_add(self._log, f"\n{msg}\n")
-                        GLib.idle_add(self._set_status, msg)
-                    else:
-                        GLib.idle_add(self._log, f"\n{success_msg}\n")
-                        GLib.idle_add(self._set_status, success_msg)
-                        GLib.idle_add(self._offer_reboot)
+                    GLib.idle_add(self._log, f"\n{success_msg}\n")
+                    GLib.idle_add(self._set_status, success_msg)
+                    GLib.idle_add(self._offer_reboot)
                 else:
                     GLib.idle_add(self._log, f"\nCommand failed (exit {proc.returncode})\n")
                     GLib.idle_add(self._set_status, f"Failed (exit {proc.returncode})")
