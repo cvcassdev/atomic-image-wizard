@@ -99,7 +99,7 @@ a rebuild or modification.
 
 
 
-**Added utilities to clean up disk space**.
+9. **Added utilities to clean up disk space**.
 
 After using this tool podman will accumulate various files and layers that will consume disk space. The added utilities are safe to use and will clean rootful podman builds and dangling images that take up disk space.
 
