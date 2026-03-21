@@ -2875,6 +2875,44 @@ class WizardWindow(Gtk.ApplicationWindow):
             self.sidebar.append(btn)
             self.step_btns.append(btn)
 
+
+        # ── Utilities section — pinned to bottom of sidebar ───────────────
+        spacer = Gtk.Box()
+        spacer.set_vexpand(True)
+        self.sidebar.append(spacer)
+
+        util_sep = Gtk.Separator()
+        util_sep.set_margin_top(6)
+        util_sep.set_margin_bottom(6)
+        self.sidebar.append(util_sep)
+
+        util_title = Gtk.Label()
+        util_title.set_markup("<b>Utilities</b>")
+        util_title.set_margin_bottom(4)
+        self.sidebar.append(util_title)
+
+        prune_cache_btn = Gtk.Button(label="\U0001f5d1  Clean build cache")
+        prune_cache_btn.set_has_frame(False)
+        prune_cache_btn.set_hexpand(True)
+        prune_cache_btn.connect("clicked", self._run_cleanup,
+            "podman builder prune -f",
+            "Clean Build Cache",
+            "Removes dangling intermediate layers left over from repeated builds.\n"
+            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
+        )
+        self.sidebar.append(prune_cache_btn)
+
+        prune_images_btn = Gtk.Button(label="\U0001f5d1  Clean unused images")
+        prune_images_btn.set_has_frame(False)
+        prune_images_btn.set_hexpand(True)
+        prune_images_btn.connect("clicked", self._run_cleanup,
+            "podman image prune -f",
+            "Clean Unused Images",
+            "Removes untagged images not referenced by any named image.\n"
+            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
+        )
+        self.sidebar.append(prune_images_btn)
+
         self.sidebar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         root.append(self.sidebar)
         root.append(self.sidebar_sep)
@@ -2901,6 +2939,96 @@ class WizardWindow(Gtk.ApplicationWindow):
         page_build._outer_scroll = self.outer_scroll
 
         self._update_ui()
+
+    # ── Cleanup utility ───────────────────────────────────────────────────
+
+    def _run_cleanup(self, _btn, cmd: str, title: str, description: str):
+        """Run a privileged podman cleanup command and stream output into a dialog."""
+        import shutil
+
+        confirm_dlg = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=title,
+            secondary_text=description + "\n\nThis requires a password prompt. Continue?"
+        )
+        confirm_dlg.get_widget_for_response(Gtk.ResponseType.OK).add_css_class("suggested-action")
+
+        def on_confirm(d, response):
+            d.close()
+            if response != Gtk.ResponseType.OK:
+                return
+
+            out_dlg = Gtk.Window(title=title, modal=True, transient_for=self)
+            out_dlg.set_default_size(700, 400)
+
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            set_margins(vbox, top=12, bottom=12, start=12, end=12)
+            out_dlg.set_child(vbox)
+
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_vexpand(True)
+            log_buf = Gtk.TextBuffer()
+            log_view = Gtk.TextView(buffer=log_buf)
+            log_view.set_monospace(True)
+            log_view.set_editable(False)
+            log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            scroll.set_child(log_view)
+            vbox.append(scroll)
+
+            status_lbl = Gtk.Label(label="Authenticating…")
+            status_lbl.set_xalign(0)
+            status_lbl.add_css_class("dim-label")
+            vbox.append(status_lbl)
+
+            close_btn = Gtk.Button(label="Close")
+            close_btn.set_halign(Gtk.Align.END)
+            close_btn.set_sensitive(False)
+            close_btn.connect("clicked", lambda _: out_dlg.close())
+            vbox.append(close_btn)
+
+            out_dlg.present()
+
+            def append_log(text):
+                log_buf.insert(log_buf.get_end_iter(), text)
+                log_view.scroll_to_iter(log_buf.get_end_iter(), 0.0, False, 0, 0)
+
+            prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
+            full_cmd = prefix + cmd.split()
+
+            def worker():
+                try:
+                    GLib.idle_add(append_log, "Running: " + " ".join(full_cmd) + "\n\n")
+                    first = True
+                    proc = subprocess.Popen(
+                        full_cmd,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                    )
+                    for line in proc.stdout:
+                        if first:
+                            GLib.idle_add(status_lbl.set_text, "Running…")
+                            first = False
+                        GLib.idle_add(append_log, line)
+                    proc.wait()
+                    if proc.returncode == 0:
+                        GLib.idle_add(status_lbl.set_text, "Done.")
+                        GLib.idle_add(append_log, "\nComplete.\n")
+                    else:
+                        GLib.idle_add(status_lbl.set_text,
+                            "Failed (exit " + str(proc.returncode) + ")")
+                        GLib.idle_add(append_log,
+                            "\nFailed (exit " + str(proc.returncode) + ")\n")
+                except Exception as e:
+                    GLib.idle_add(status_lbl.set_text, "Error: " + str(e))
+                    GLib.idle_add(append_log, "\nError: " + str(e) + "\n")
+                finally:
+                    GLib.idle_add(close_btn.set_sensitive, True)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        confirm_dlg.connect("response", on_confirm)
+        confirm_dlg.present()
 
     def jump_to_page(self, index: int):
         self.current = max(0, min(index, len(self.pages) - 1))
