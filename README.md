@@ -25,6 +25,7 @@ without writing Containerfiles by hand.
 
 > **Note on PyGObject:** If the installer reports missing GTK4 bindings, add the
 > following to your Containerfile and rebuild before running the installer:
+> 
 > ```
 > RUN dnf install -y python3-gobject gtk4 && dnf clean all
 > ```
@@ -48,6 +49,7 @@ bash install.sh
 ```
 
 The installer will:
+
 - Check that all dependencies are present and give clear guidance if anything is missing
 - Create `~/bootc/` — this is where the wizard and your Containerfiles will live
 - Copy `atomic_image_wizard.py` and `atomic_image_wizard.svg` into `~/bootc/`
@@ -95,6 +97,12 @@ The wizard saves your Containerfile to `~/bootc/Containerfile`. On next launch i
 will detect any existing Containerfile and offer to load it as a starting point for
 a rebuild or modification.
 
+
+
+****Added utilities to clean up disk space. ****
+
+After using this tool podman will accumulate various files and layers that will consume disk space. The added utilities are to safe to use and will clean rootful podman builds and danglimg images that take up disk space.
+
 ---
 
 ## Current status
@@ -122,6 +130,7 @@ is especially welcome.
 ## Reporting issues
 
 Please include:
+
 - Which Fedora Atomic spin and version you are running
 - What you were doing when the issue occurred
 - The contents of your Containerfile if relevant (Review page → Copy log to clipboard)
