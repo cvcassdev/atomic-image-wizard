@@ -529,19 +529,15 @@ class PageLanding(Gtk.Box):
         parser     = ContainerfileParser(cf_path)
         self._base = parser.parse_from()
 
-        # ── Vertically centred content ────────────────────────────────────
+        # ── Content sits near the top ─────────────────────────────────────
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.set_vexpand(True)
         outer.set_hexpand(True)
 
-        top_spacer = Gtk.Box()
-        top_spacer.set_vexpand(True)
-        outer.append(top_spacer)
-
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28)
         inner.set_halign(Gtk.Align.CENTER)
-        inner.set_valign(Gtk.Align.CENTER)
-        set_margins(inner, top=40, bottom=40, start=60, end=60)
+        inner.set_valign(Gtk.Align.START)
+        set_margins(inner, top=48, bottom=32, start=60, end=60)
 
         title = Gtk.Label()
         title.set_markup("<b><big>Atomic Image Wizard</big></b>")
@@ -607,15 +603,51 @@ class PageLanding(Gtk.Box):
         btn_box.append(new_btn)
 
         inner.append(btn_box)
+        # ── Disk Cleanup Utilities ─────────────────────────────────────────
+        cleanup_sep = Gtk.Separator()
+        cleanup_sep.set_margin_top(8)
+        cleanup_sep.set_margin_bottom(4)
+        inner.append(cleanup_sep)
+
+        cleanup_label = Gtk.Label()
+        cleanup_label.set_markup("<b>Disk Cleanup Utilities</b>")
+        cleanup_label.set_halign(Gtk.Align.CENTER)
+        cleanup_label.set_hexpand(True)
+        inner.append(cleanup_label)
+
+        cleanup_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        cleanup_box.set_halign(Gtk.Align.CENTER)
+
+        prune_cache_btn = Gtk.Button(label="\U0001f5d1  Clean build cache")
+        prune_cache_btn.connect("clicked", self._run_cleanup,
+            "podman builder prune -f",
+            "Clean Build Cache",
+            "Removes dangling intermediate layers left over from repeated builds.\n"
+            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
+        )
+        cleanup_box.append(prune_cache_btn)
+
+        prune_images_btn = Gtk.Button(label="\U0001f5d1  Clean unused images")
+        prune_images_btn.connect("clicked", self._run_cleanup,
+            "podman image prune -f",
+            "Clean Unused Images",
+            "Removes untagged images not referenced by any named image.\n"
+            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
+        )
+        cleanup_box.append(prune_images_btn)
+
+        inner.append(cleanup_box)
+
         outer.append(inner)
-
-        bot_spacer = Gtk.Box()
-        bot_spacer.set_vexpand(True)
-        outer.append(bot_spacer)
-
         self.append(outer)
 
     # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _run_cleanup(self, btn, cmd, title, description):
+        """Delegate to WizardWindow._run_cleanup so the logic lives in one place."""
+        win = self.get_root()
+        if hasattr(win, "_run_cleanup"):
+            win._run_cleanup(btn, cmd, title, description)
 
     def _load_containerfile(self):
         """Parse the Containerfile into state, show warnings if any."""
@@ -2876,43 +2908,6 @@ class WizardWindow(Gtk.ApplicationWindow):
             self.step_btns.append(btn)
 
 
-        # ── Utilities section — pinned to bottom of sidebar ───────────────
-        spacer = Gtk.Box()
-        spacer.set_vexpand(True)
-        self.sidebar.append(spacer)
-
-        util_sep = Gtk.Separator()
-        util_sep.set_margin_top(6)
-        util_sep.set_margin_bottom(6)
-        self.sidebar.append(util_sep)
-
-        util_title = Gtk.Label()
-        util_title.set_markup("<b>Utilities</b>")
-        util_title.set_margin_bottom(4)
-        self.sidebar.append(util_title)
-
-        prune_cache_btn = Gtk.Button(label="\U0001f5d1  Clean build cache")
-        prune_cache_btn.set_has_frame(False)
-        prune_cache_btn.set_hexpand(True)
-        prune_cache_btn.connect("clicked", self._run_cleanup,
-            "podman builder prune -f",
-            "Clean Build Cache",
-            "Removes dangling intermediate layers left over from repeated builds.\n"
-            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
-        )
-        self.sidebar.append(prune_cache_btn)
-
-        prune_images_btn = Gtk.Button(label="\U0001f5d1  Clean unused images")
-        prune_images_btn.set_has_frame(False)
-        prune_images_btn.set_hexpand(True)
-        prune_images_btn.connect("clicked", self._run_cleanup,
-            "podman image prune -f",
-            "Clean Unused Images",
-            "Removes untagged images not referenced by any named image.\n"
-            "Your named images (e.g. localhost/atomic-custom:latest) are NOT affected."
-        )
-        self.sidebar.append(prune_images_btn)
-
         self.sidebar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         root.append(self.sidebar)
         root.append(self.sidebar_sep)
@@ -2977,6 +2972,13 @@ class WizardWindow(Gtk.ApplicationWindow):
             scroll.set_child(log_view)
             vbox.append(scroll)
 
+            # ── Progress bar (pulse mode) ──────────────────────────────────
+            progress = Gtk.ProgressBar()
+            progress.set_pulse_step(0.08)
+            progress.set_text("Working…")
+            progress.set_show_text(True)
+            vbox.append(progress)
+
             status_lbl = Gtk.Label(label="Authenticating…")
             status_lbl.set_xalign(0)
             status_lbl.add_css_class("dim-label")
@@ -2997,6 +2999,14 @@ class WizardWindow(Gtk.ApplicationWindow):
             prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
             full_cmd = prefix + cmd.split()
 
+            # Holds the GLib timer source ID so we can cancel it when done
+            pulse_timer_id = [None]
+
+            def stop_pulse():
+                if pulse_timer_id[0] is not None:
+                    GLib.source_remove(pulse_timer_id[0])
+                    pulse_timer_id[0] = None
+
             def worker():
                 try:
                     GLib.idle_add(append_log, "Running: " + " ".join(full_cmd) + "\n\n")
@@ -3005,21 +3015,40 @@ class WizardWindow(Gtk.ApplicationWindow):
                         full_cmd,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                     )
+
+                    # Start pulsing once the process is running
+                    def start_pulse():
+                        def do_pulse():
+                            progress.pulse()
+                            return True   # keep firing
+                        pulse_timer_id[0] = GLib.timeout_add(80, do_pulse)
+
+                    GLib.idle_add(start_pulse)
+
                     for line in proc.stdout:
                         if first:
                             GLib.idle_add(status_lbl.set_text, "Running…")
                             first = False
                         GLib.idle_add(append_log, line)
                     proc.wait()
+
+                    GLib.idle_add(stop_pulse)
+
                     if proc.returncode == 0:
+                        GLib.idle_add(progress.set_fraction, 1.0)
+                        GLib.idle_add(progress.set_text, "Complete")
                         GLib.idle_add(status_lbl.set_text, "Done.")
                         GLib.idle_add(append_log, "\nComplete.\n")
                     else:
+                        GLib.idle_add(progress.set_fraction, 0.0)
+                        GLib.idle_add(progress.set_text, "Failed")
                         GLib.idle_add(status_lbl.set_text,
                             "Failed (exit " + str(proc.returncode) + ")")
                         GLib.idle_add(append_log,
                             "\nFailed (exit " + str(proc.returncode) + ")\n")
                 except Exception as e:
+                    GLib.idle_add(stop_pulse)
+                    GLib.idle_add(progress.set_text, "Error")
                     GLib.idle_add(status_lbl.set_text, "Error: " + str(e))
                     GLib.idle_add(append_log, "\nError: " + str(e) + "\n")
                 finally:
