@@ -11,6 +11,10 @@ import threading
 import sys
 import os
 import re
+import json
+import time
+import urllib.request
+import urllib.error
 
 
 # =============================================================================
@@ -56,14 +60,14 @@ PRESET_REPOS = [
      "-o /etc/yum.repos.d/brave-browser.repo"),
 ]
 
-# ── Fedora version constants — update these when a new release ships ──────────
+# ── Fedora version constants — fallback only, used when registry is unreachable ─
 FEDORA_STABLE  = 43   # current stable release
-FEDORA_NEXT    = 44   # beta / branched — increment alongside stable
-# Rawhide is always "rawhide", no number needed
+FEDORA_NEXT    = 44   # beta / branched
 
 # Service name used by scx-scheds — normalised to one constant everywhere
 SCX_SERVICE = "scx_loader.service"
-# Update this list if Fedora adds or renames a desktop variant
+
+# Desktop variants to query from the registry
 _ATOMIC_DESKTOPS = [
     "silverblue",
     "kinoite",
@@ -72,14 +76,27 @@ _ATOMIC_DESKTOPS = [
     "cosmic-atomic",
 ]
 
+# How many past numeric releases to include in the dropdown (current + this many back)
+_REGISTRY_RELEASE_DEPTH = 2
+
+
+# =============================================================================
+#  Registry preset cache
+# =============================================================================
+_CACHE_DIR  = os.path.join(GLib.get_user_cache_dir(), "atomic-image-wizard")
+_CACHE_FILE = os.path.join(_CACHE_DIR, "presets.json")
+_CACHE_TTL  = 7 * 24 * 60 * 60   # 7 days in seconds
+
+
 def _build_base_presets() -> list[str]:
-    base = "quay.io/fedora-ostree-desktops"
+    """Hardcoded fallback list — used when registry is unreachable and no cache exists."""
+    base  = "quay.io/fedora-ostree-desktops"
     bootc = "quay.io/fedora/fedora-bootc"
     presets = []
-    for tag, label in (
-        (FEDORA_STABLE, f"Fedora {FEDORA_STABLE} — stable"),
-        (FEDORA_NEXT,   f"Fedora {FEDORA_NEXT} — beta"),
-        ("rawhide",     "Rawhide — bleeding edge"),
+    for tag, _ in (
+        (FEDORA_STABLE, "stable"),
+        (FEDORA_NEXT,   "beta"),
+        ("rawhide",     "rawhide"),
     ):
         for desktop in _ATOMIC_DESKTOPS:
             presets.append(f"{base}/{desktop}:{tag}")
@@ -87,12 +104,159 @@ def _build_base_presets() -> list[str]:
     presets.append(f"{bootc}:latest")
     return presets
 
-BASE_PRESETS = _build_base_presets()
+
+def _load_cache() -> tuple[list[str] | None, bool, bool]:
+    """
+    Load presets from the on-disk cache.
+
+    Returns (presets, is_fresh, from_cache):
+      presets   — list of image strings, or None if no cache exists
+      is_fresh  — True if within TTL
+      from_cache — True if any cached data was found at all
+    """
+    try:
+        with open(_CACHE_FILE) as f:
+            data = json.load(f)
+        presets   = data.get("presets", [])
+        timestamp = data.get("timestamp", 0)
+        if not presets:
+            return None, False, False
+        is_fresh = (time.time() - timestamp) < _CACHE_TTL
+        return presets, is_fresh, True
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None, False, False
+
+
+def _save_cache(presets: list[str]) -> None:
+    """Write presets to disk cache with current timestamp."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_CACHE_FILE, "w") as f:
+            json.dump({"timestamp": time.time(), "presets": presets}, f, indent=2)
+    except OSError:
+        pass   # non-fatal — app works fine without a cache write
+
+
+def _fetch_presets_from_registry() -> list[str] | None:
+    """
+    Query the Quay.io API for available tags on each desktop repo and bootc.
+
+    Returns an ordered list of image strings, or None on failure.
+    Tag ordering: newest numeric releases first (per desktop), then rawhide, then latest.
+    Only the current + _REGISTRY_RELEASE_DEPTH previous numeric versions are included
+    to keep the dropdown manageable.
+
+    All per-repo tag fetches after the anchor query run concurrently via
+    ThreadPoolExecutor, reducing wall-clock time from ~15s sequential to ~2-3s.
+    Each repo is fetched exactly once — results are reused for both version
+    and rawhide checks.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    base       = "quay.io/fedora-ostree-desktops"
+    bootc_org  = "fedora"
+    bootc_repo = "fedora-bootc"
+    bootc_ref  = "quay.io/fedora/fedora-bootc"
+
+    def _query_tags(org: str, repo: str) -> list[str]:
+        url = (f"https://quay.io/api/v1/repository/{org}/{repo}"
+               f"/tag/?limit=100&onlyActiveTags=true")
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode())
+            return [t["name"] for t in data.get("tags", []) if "name" in t]
+        except (urllib.error.URLError, json.JSONDecodeError, OSError, KeyError):
+            return []
+
+    def _numeric_tags(tags: list[str]) -> list[int]:
+        nums = []
+        for t in tags:
+            if re.fullmatch(r"\d+", t):
+                try:
+                    nums.append(int(t))
+                except ValueError:
+                    pass
+        return sorted(set(nums), reverse=True)
+
+    # ── Step 1: anchor query (sequential — everything else depends on this) ──
+    # Silverblue is the most stable indicator of available releases.
+    anchor_tags = _query_tags("fedora-ostree-desktops", "silverblue")
+    if not anchor_tags:
+        return None   # network failure — caller will use cache or fallback
+
+    numeric_releases = _numeric_tags(anchor_tags)[:_REGISTRY_RELEASE_DEPTH + 1]
+    if not numeric_releases:
+        return None
+
+    # ── Step 2: fetch all remaining repos concurrently, each exactly once ───
+    # Build the full set of (org, repo) pairs we need, excluding silverblue
+    # which we already have from the anchor query.
+    repos_to_fetch = (
+        [(bootc_org, bootc_repo)]
+        + [("fedora-ostree-desktops", d)
+           for d in _ATOMIC_DESKTOPS if d != "silverblue"]
+    )
+
+    # tag_cache: (org, repo) → [tag, ...]
+    tag_cache: dict[tuple[str, str], list[str]] = {
+        ("fedora-ostree-desktops", "silverblue"): anchor_tags,
+    }
+
+    with ThreadPoolExecutor(max_workers=len(repos_to_fetch)) as pool:
+        future_to_key = {
+            pool.submit(_query_tags, org, repo): (org, repo)
+            for org, repo in repos_to_fetch
+        }
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                tag_cache[key] = future.result()
+            except Exception:
+                tag_cache[key] = []   # treat failed fetch as empty — non-fatal
+
+    # ── Step 3: assemble preset list from cached tag data ───────────────────
+    presets = []
+
+    # Numeric releases — newest first, desktops in _ATOMIC_DESKTOPS order
+    for ver in numeric_releases:
+        ver_str = str(ver)
+        for desktop in _ATOMIC_DESKTOPS:
+            tags = tag_cache.get(("fedora-ostree-desktops", desktop), [])
+            if ver_str in tags:
+                presets.append(f"{base}/{desktop}:{ver_str}")
+        bootc_tags = tag_cache.get((bootc_org, bootc_repo), [])
+        if ver_str in bootc_tags:
+            presets.append(f"{bootc_ref}:{ver_str}")
+
+    # Rawhide — reuse the same cached tag lists, no extra HTTP calls
+    for desktop in _ATOMIC_DESKTOPS:
+        tags = tag_cache.get(("fedora-ostree-desktops", desktop), [])
+        if "rawhide" in tags:
+            presets.append(f"{base}/{desktop}:rawhide")
+    bootc_tags = tag_cache.get((bootc_org, bootc_repo), [])
+    if "rawhide" in bootc_tags:
+        presets.append(f"{bootc_ref}:rawhide")
+
+    # latest — bootc only
+    if "latest" in bootc_tags:
+        presets.append(f"{bootc_ref}:latest")
+
+    return presets if presets else None
+
+
+# Initial preset list — populated from cache if available, otherwise hardcoded fallback.
+# PageBase will refresh this asynchronously on first run or when cache is stale.
+def _initial_presets() -> list[str]:
+    cached, _fresh, found = _load_cache()
+    if found:
+        return cached
+    return _build_base_presets()
+
+
+BASE_PRESETS = _initial_presets()
 
 # (label, [packages], requires_rpmfusion_free, requires_rpmfusion_nonfree)
-# ── RPM Fusion: media codecs & hardware acceleration ─────────────────────────
-# All entries here are pure userspace — they work correctly inside a container
-# and take effect on next boot without any kernel module build step.
 PACKAGE_PRESETS = [
     ("Multimedia codecs [RF]",
      ["gstreamer1-plugins-base", "gstreamer1-plugins-good",
@@ -103,16 +267,10 @@ PACKAGE_PRESETS = [
     ("libavcodec [RF]",         ["libavcodec-freeworld"], True, True),
     ("VLC [RF]",                ["vlc"], True, True),
     ("DVD playback [RF]",       ["libdvdcss"], True, True),
-    # Intel VA-API driver + libva-utils (vainfo) to verify hardware decode works
     ("Intel VA-API driver [RF]", ["intel-media-driver", "libva-utils"], True, False),
-    # AMD VA-API driver (Mesa) + libva-utils — Mesa ships in Fedora but
-    # libva-utils needs RF Free for the test tool
     ("AMD VA-API utils [RF]",   ["libva-utils"], True, False),
-    # ROCm OpenCL — userspace compute, no kernel module required
     ("AMD ROCm OpenCL [RF]",    ["rocm-opencl"], False, True),
     ("Steam [RF-NF]",           ["steam"], True, True),
-    # ── CLI tools ─────────────────────────────────────────────────────────────
-    # Spartan by design — many tools (podman-compose, etc.) ship in the base image
     ("htop + btop",             ["htop", "btop"], False, False),
     ("zsh",                     ["zsh"], False, False),
     ("fish shell",              ["fish"], False, False),
@@ -152,7 +310,6 @@ def make_header(title: str, subtitle: str) -> Gtk.Box:
 
 
 def set_margins(widget, top=0, bottom=0, start=0, end=0):
-    """Convenience wrapper — avoids repeating four set_margin_* calls everywhere."""
     widget.set_margin_top(top)
     widget.set_margin_bottom(bottom)
     widget.set_margin_start(start)
@@ -184,16 +341,9 @@ def show_error(parent, text: str):
 
 
 # =============================================================================
-#  Containerfile parser  (extracted from PageBase for clarity and testability)
+#  Containerfile parser
 # =============================================================================
 class ContainerfileParser:
-    """
-    Parses an existing Containerfile into WizardState fields.
-
-    Limitations are surfaced via self.warnings so the UI can show them
-    rather than silently dropping unrecognised constructs.
-    """
-
     PERF_PKG_FLAGS = {
         "cachyos-settings":     "perf_cachyos_settings",
         "cachyos-ksm-settings": "perf_ksm_settings",
@@ -202,17 +352,14 @@ class ContainerfileParser:
     }
     PERF_COPR = "bieszczaders/kernel-cachyos-addons"
 
-    SKIP_TOKENS = {"dnf", "install", "remove", "-y", "clean", "all", "&&", "\\",
+    SKIP_TOKENS = {"dnf5", "dnf", "install", "remove", "-y", "clean", "all", "&&", "\\",
                    "--allowerasing", "repoquery", "config-manager", "--add-repo"}
 
     def __init__(self, path: str):
         self.path     = path
-        self.warnings = []   # list of human-readable strings shown to the user
-
-    # ── public ────────────────────────────────────────────────────────────────
+        self.warnings = []
 
     def parse_from(self) -> str:
-        """Return the FROM value, or '' if not found."""
         try:
             with open(self.path) as f:
                 for line in f:
@@ -224,11 +371,6 @@ class ContainerfileParser:
         return ""
 
     def apply_to_state(self, state) -> None:
-        """
-        Parse the full Containerfile and populate *state* in-place.
-        Unrecognised RUN commands are noted in self.warnings instead of
-        being silently dropped.
-        """
         try:
             with open(self.path) as f:
                 text = f.read()
@@ -237,11 +379,8 @@ class ContainerfileParser:
             return
 
         self._validate(text)
-
-        # Flatten backslash-newline continuations so each logical RUN is one line
         flat = text.replace("\\\n", " ")
 
-        # RPM Fusion — detected by URL fragment
         if "rpmfusion-free" in flat:
             state.repos.add("RPM Fusion Free")
         if "rpmfusion-nonfree" in flat:
@@ -250,10 +389,7 @@ class ContainerfileParser:
         for m in re.finditer(r"^RUN (.+)$", flat, re.MULTILINE):
             self._process_run(m.group(1).strip(), state)
 
-    # ── private ───────────────────────────────────────────────────────────────
-
     def _validate(self, text: str):
-        """Basic sanity checks — populate self.warnings with any issues found."""
         stripped = text.strip()
         if not stripped:
             self.warnings.append("Containerfile is empty.")
@@ -283,7 +419,7 @@ class ContainerfileParser:
         recognised = False
         for cmd in cmds:
             cmd = cmd.strip()
-            if not cmd or cmd in ("dnf clean all",):
+            if not cmd or cmd in ("dnf5 clean all", "dnf clean all"):
                 recognised = True
                 continue
             recognised |= self._dispatch_cmd(cmd, state)
@@ -294,12 +430,9 @@ class ContainerfileParser:
             )
 
     def _dispatch_cmd(self, cmd: str, state) -> bool:
-        """Return True if the command was recognised and handled."""
-
-        # dnf install
-        if re.match(r"dnf install -y\b", cmd):
+        if re.match(r"dnf5? install -y\b", cmd):
             if "rpmfusion" in cmd:
-                return True   # already handled via URL fragment scan
+                return True
             for token in cmd.split():
                 if not self._is_pkg_token(token):
                     continue
@@ -312,27 +445,23 @@ class ContainerfileParser:
                     state.install_pkgs.append(token)
             return True
 
-        # dnf remove
-        if re.match(r"dnf remove -y\b", cmd):
+        if re.match(r"dnf5? remove -y\b", cmd):
             for token in cmd.split():
                 if self._is_pkg_token(token) and token not in state.remove_pkgs:
                     state.remove_pkgs.append(token)
             return True
 
-        # dnf copr enable
-        if re.match(r"dnf copr enable\b", cmd):
+        if re.match(r"dnf5? copr enable\b", cmd):
             repo = cmd.split()[-1]
             if repo == self.PERF_COPR:
-                return True   # managed by performance section
+                return True
             if repo not in state.copr_repos:
                 state.copr_repos.append(repo)
             return True
 
-        # dnf-command(copr) install — auto-added by generator, skip
-        if "dnf-command(copr)" in cmd:
+        if "dnf5-command(copr)" in cmd or "dnf-command(copr)" in cmd:
             return True
 
-        # systemctl enable / disable
         if re.match(r"systemctl enable\b", cmd):
             svc = cmd.split()[-1]
             if svc not in state.systemd_enable:
@@ -344,7 +473,6 @@ class ContainerfileParser:
                 state.systemd_disable.append(svc)
             return True
 
-        # Custom repo setup commands
         if (cmd.startswith("curl") or
                 cmd.startswith("rpm --import") or
                 cmd.startswith("rpm -i") or
@@ -353,7 +481,6 @@ class ContainerfileParser:
                 state.custom_repos.append(cmd)
             return True
 
-        # mkdir / printf / rm — generated housekeeping, not user data
         if cmd.startswith(("mkdir", "printf", "rm ")):
             return True
 
@@ -383,8 +510,8 @@ class WizardState:
         if m:
             return m.group(1)
         if "rawhide" in self.base_image.lower():
-            return str(FEDORA_STABLE)   # RPM Fusion has no rawhide release, use stable
-        return str(FEDORA_STABLE)       # fallback
+            return str(FEDORA_STABLE)
+        return str(FEDORA_STABLE)
 
     def generate_containerfile(self) -> str:
         DIVIDER = "# " + "\u2500" * 62
@@ -397,14 +524,13 @@ class WizardState:
 
         PERF_PKGS = {"cachyos-settings", "cachyos-ksm-settings", "scx-scheds", "scx-tools"}
 
-        # ── Section 1: Repositories ───────────────────────────────────────
         repo_parts = []
         copr_repos = [r for r in self.copr_repos if r != "bieszczaders/kernel-cachyos-addons"]
 
         if copr_repos:
-            repo_parts.append("dnf install -y 'dnf-command(copr)'")
+            repo_parts.append("dnf5 install -y 'dnf5-command(copr)'")
             for repo in copr_repos:
-                repo_parts.append(f"dnf copr enable -y {repo}")
+                repo_parts.append(f"dnf5 copr enable -y {repo}")
 
         for cmd in self.custom_repos:
             repo_parts.append(cmd)
@@ -416,15 +542,14 @@ class WizardState:
             if "RPM Fusion Non-Free" in self.repos:
                 rpms.append(RPM_FUSION_NONFREE_URL.format(ver=ver))
             rpm_lines = " \\\n        ".join(rpms)
-            repo_parts.append("dnf install -y \\\n        " + rpm_lines)
+            repo_parts.append("dnf5 install -y \\\n        " + rpm_lines)
 
         if repo_parts:
-            repo_parts.append("dnf clean all")
+            repo_parts.append("dnf5 clean all")
             out.append("")
             out += section(1, "Add external repositories")
             out.append("RUN " + " \\\n    && ".join(repo_parts))
 
-        # ── Section 2: Remove + Install ───────────────────────────────────
         install_list = [
             p for p in self.install_pkgs
             if "dnf-command" not in p and p not in PERF_PKGS
@@ -444,14 +569,13 @@ class WizardState:
             run_parts = []
             if has_remove:
                 pkgs = " \\\n        ".join(sorted(self.remove_pkgs))
-                run_parts.append("dnf remove -y \\\n        " + pkgs)
+                run_parts.append("dnf5 remove -y \\\n        " + pkgs)
             if has_install:
                 pkgs = " \\\n        ".join(sorted(install_list))
-                run_parts.append("dnf install -y \\\n        " + pkgs)
-            run_parts.append("dnf clean all")
+                run_parts.append("dnf5 install -y \\\n        " + pkgs)
+            run_parts.append("dnf5 clean all")
             out.append("RUN " + " \\\n    && ".join(run_parts))
 
-        # ── Section 3: Performance tweaks ─────────────────────────────────
         perf_pkgs = []
         if self.perf_cachyos_settings:
             perf_pkgs.append("cachyos-settings")
@@ -464,10 +588,10 @@ class WizardState:
             out.append("")
             out += section(3, "Performance tweaks (CachyOS addons \u2014 requires kernel 6.12+)")
             perf_parts = [
-                "dnf install -y 'dnf-command(copr)'",
-                "dnf copr enable -y bieszczaders/kernel-cachyos-addons",
-                "dnf install -y --allowerasing " + " \\\n        ".join(perf_pkgs),
-                "dnf clean all",
+                "dnf5 install -y 'dnf5-command(copr)'",
+                "dnf5 copr enable -y bieszczaders/kernel-cachyos-addons",
+                "dnf5 install -y --allowerasing " + " \\\n        ".join(perf_pkgs),
+                "dnf5 clean all",
             ]
             if self.perf_scx_scheds:
                 cfg = 'default_sched = "scx_bpfland"\\ndefault_mode = "Auto"\\n'
@@ -477,7 +601,6 @@ class WizardState:
                 )
             out.append("RUN " + " \\\n    && ".join(perf_parts))
 
-        # ── Section 4: Enable / disable services ──────────────────────────
         enable  = [s for s in self.systemd_enable if s != SCX_SERVICE]
         disable = list(self.systemd_disable)
         if self.perf_scx_scheds:
@@ -499,10 +622,6 @@ class WizardState:
         return "\n".join(out)
 
     def validate_for_build(self) -> list[str]:
-        """
-        Return a list of human-readable problems that should block a build.
-        An empty list means the state is safe to build.
-        """
         issues = []
         if not self.base_image.strip():
             issues.append("No base image specified (Step 1).")
@@ -516,7 +635,7 @@ class WizardState:
 
 
 # =============================================================================
-#  PAGE 0 - Landing  (only shown when an existing Containerfile is found)
+#  PAGE 0 - Landing
 # =============================================================================
 class PageLanding(Gtk.Box):
     def __init__(self, state: WizardState, cf_path: str):
@@ -525,11 +644,9 @@ class PageLanding(Gtk.Box):
         self.cf_path = cf_path
         set_margins(self, top=0, bottom=0, start=0, end=0)
 
-        # Parse immediately so we can show the detected base image
         parser     = ContainerfileParser(cf_path)
         self._base = parser.parse_from()
 
-        # ── Content sits near the top ─────────────────────────────────────
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.set_vexpand(True)
         outer.set_hexpand(True)
@@ -554,7 +671,6 @@ class PageLanding(Gtk.Box):
         found_lbl.set_wrap(True)
         inner.append(found_lbl)
 
-        # ── Option buttons ────────────────────────────────────────────────
         btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         btn_box.set_halign(Gtk.Align.CENTER)
 
@@ -603,7 +719,7 @@ class PageLanding(Gtk.Box):
         btn_box.append(new_btn)
 
         inner.append(btn_box)
-        # ── Disk Cleanup Utilities ─────────────────────────────────────────
+
         cleanup_sep = Gtk.Separator()
         cleanup_sep.set_margin_top(8)
         cleanup_sep.set_margin_bottom(4)
@@ -637,20 +753,15 @@ class PageLanding(Gtk.Box):
         cleanup_box.append(prune_images_btn)
 
         inner.append(cleanup_box)
-
         outer.append(inner)
         self.append(outer)
 
-    # ── Helpers ───────────────────────────────────────────────────────────
-
     def _run_cleanup(self, btn, cmd, title, description):
-        """Delegate to WizardWindow._run_cleanup so the logic lives in one place."""
         win = self.get_root()
         if hasattr(win, "_run_cleanup"):
             win._run_cleanup(btn, cmd, title, description)
 
     def _load_containerfile(self):
-        """Parse the Containerfile into state, show warnings if any."""
         self.state.install_pkgs.clear()
         self.state.remove_pkgs.clear()
         self.state.systemd_enable.clear()
@@ -680,8 +791,6 @@ class PageLanding(Gtk.Box):
             d.connect("response", lambda d, _: d.close())
             d.present()
 
-    # ── Button handlers ───────────────────────────────────────────────────
-
     def _do_upgrade(self, *_):
         self._load_containerfile()
         win = self.get_root()
@@ -695,7 +804,6 @@ class PageLanding(Gtk.Box):
             win.jump_to_page(win.REPOS_IDX)
 
     def _do_new_build(self, *_):
-        # Clear state and go to base image selector
         self.state.__init__()
         win = self.get_root()
         if hasattr(win, "jump_to_page"):
@@ -708,7 +816,9 @@ class PageLanding(Gtk.Box):
 class PageBase(Gtk.Box):
     def __init__(self, state: WizardState):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.state = state
+        self.state         = state
+        self._presets      = list(BASE_PRESETS)   # local copy, updated on refresh
+        self._fetching     = False
         set_margins(self, top=12, bottom=12, start=16, end=16)
 
         self.append(make_header(
@@ -716,10 +826,32 @@ class PageBase(Gtk.Box):
             "Select the starting point for your custom image."
         ))
 
-        self.dropdown = Gtk.DropDown.new_from_strings(BASE_PRESETS)
+        # ── Dropdown + refresh controls ───────────────────────────────────
+        dropdown_row = Gtk.Box(spacing=8)
+        dropdown_row.set_hexpand(True)
+
+        self.dropdown = Gtk.DropDown.new_from_strings(self._presets)
         self.dropdown.set_selected(0)
+        self.dropdown.set_hexpand(True)
         self.dropdown.connect("notify::selected-item", self._on_dropdown)
-        self.append(self.dropdown)
+        dropdown_row.append(self.dropdown)
+
+        self.refresh_spinner = Gtk.Spinner()
+        dropdown_row.append(self.refresh_spinner)
+
+        self.refresh_btn = Gtk.Button(label="↺  Refresh list")
+        self.refresh_btn.set_tooltip_text("Fetch the latest available images from the registry")
+        self.refresh_btn.connect("clicked", self._do_refresh)
+        dropdown_row.append(self.refresh_btn)
+
+        self.append(dropdown_row)
+
+        # ── Cache status note ─────────────────────────────────────────────
+        self.cache_note = Gtk.Label()
+        self.cache_note.set_xalign(0)
+        self.cache_note.add_css_class("dim-label")
+        self._update_cache_note()
+        self.append(self.cache_note)
 
         sep_lbl = Gtk.Label(label="— or enter a custom image —")
         sep_lbl.add_css_class("dim-label")
@@ -744,7 +876,7 @@ class PageBase(Gtk.Box):
         self.append(frame)
         self._refresh_preview()
 
-        # ── rpm-ostree status banner (hidden until populated) ─────────────
+        # ── rpm-ostree status banner ──────────────────────────────────────
         self.ostree_banner = Gtk.Frame()
         banner_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         set_margins(banner_box, top=8, bottom=8, start=10, end=10)
@@ -753,7 +885,6 @@ class PageBase(Gtk.Box):
         self.banner_lbl.set_wrap(True)
         banner_box.append(self.banner_lbl)
 
-        # Confirm button — user must explicitly accept the detected state
         self.banner_accept_btn = Gtk.Button(label="Accept detected settings")
         self.banner_accept_btn.add_css_class("suggested-action")
         self.banner_accept_btn.set_halign(Gtk.Align.START)
@@ -764,10 +895,91 @@ class PageBase(Gtk.Box):
         self.ostree_banner.set_visible(False)
         self.append(self.ostree_banner)
 
-        # Pending detection results — held until the user clicks Accept
-        self._pending_repos    = []
-        self._pending_custom   = []
-        self._pending_pkgs     = []
+        self._pending_repos   = []
+        self._pending_custom  = []
+        self._pending_pkgs    = []
+
+    # ── Cache note ────────────────────────────────────────────────────────
+
+    def _update_cache_note(self, status: str = ""):
+        """Update the dim label below the dropdown describing cache state."""
+        if status:
+            self.cache_note.set_text(status)
+            return
+        cached, is_fresh, found = _load_cache()
+        if not found:
+            self.cache_note.set_text("Using built-in image list — click ↺ Refresh to fetch from registry.")
+        elif is_fresh:
+            try:
+                ts = json.load(open(_CACHE_FILE)).get("timestamp", 0)
+                age_days = (time.time() - ts) / 86400
+                self.cache_note.set_text(f"Image list from registry cache ({age_days:.1f} days old).")
+            except Exception:
+                self.cache_note.set_text("Image list from registry cache.")
+        else:
+            self.cache_note.set_text("Image list cache is stale — click ↺ Refresh to update.")
+
+    # ── Refresh ───────────────────────────────────────────────────────────
+
+    def _do_refresh(self, *_):
+        """Manually refresh the image list from the registry, bypassing TTL."""
+        if self._fetching:
+            return
+        self._fetching = True
+        self.refresh_btn.set_sensitive(False)
+        self.refresh_spinner.start()
+        self._update_cache_note("Fetching image list from registry…")
+        threading.Thread(target=self._fetch_worker, daemon=True).start()
+
+    def _fetch_worker(self):
+        presets = _fetch_presets_from_registry()
+        GLib.idle_add(self._apply_fetched_presets, presets)
+
+    def _apply_fetched_presets(self, presets: list[str] | None):
+        self._fetching = False
+        self.refresh_btn.set_sensitive(True)
+        self.refresh_spinner.stop()
+
+        if presets:
+            _save_cache(presets)
+            self._presets = presets
+            self._repopulate_dropdown(presets)
+            self._update_cache_note("Image list updated from registry.")
+        else:
+            self._update_cache_note(
+                "Refresh failed — using cached list. Check your network connection."
+            )
+
+    def _repopulate_dropdown(self, presets: list[str]):
+        """Replace dropdown contents with a new preset list, preserving selection if possible."""
+        current_text = self.entry.get_text().strip()
+        new_model = Gtk.StringList.new(presets)
+        self.dropdown.set_model(new_model)
+
+        # Restore selection to the previously chosen image if it still exists
+        for i, p in enumerate(presets):
+            if p == current_text:
+                self.dropdown.set_selected(i)
+                return
+        self.dropdown.set_selected(0)
+
+    # ── Auto-fetch on first run (stale or no cache) ───────────────────────
+
+    def _maybe_auto_fetch(self):
+        """Trigger a background fetch if cache is missing or stale. Silent — no spinner."""
+        _cached, is_fresh, found = _load_cache()
+        if found and is_fresh:
+            return
+        if self._fetching:
+            return
+        self._fetching = True
+        self.refresh_btn.set_sensitive(False)
+        self.refresh_spinner.start()
+        if not found:
+            self._update_cache_note("Fetching image list from registry for the first time…")
+        else:
+            self._update_cache_note("Refreshing stale image list from registry…")
+        threading.Thread(target=self._fetch_worker, daemon=True).start()
 
     # ── Dropdown / entry ──────────────────────────────────────────────────
 
@@ -783,7 +995,7 @@ class PageBase(Gtk.Box):
     def _refresh_preview(self):
         self.preview.set_text(f"FROM {self.state.base_image}")
 
-    # ── Registry search ───────────────────────────────────────────────────
+    # ── Registry search (podman) ──────────────────────────────────────────
 
     def _do_registry_search(self, *_):
         win = self.get_root()
@@ -899,8 +1111,10 @@ class PageBase(Gtk.Box):
     def on_enter(self):
         self.entry.set_text(self.state.base_image)
         self._refresh_preview()
-        if not self.state.base_image or self.state.base_image == BASE_PRESETS[0]:
+        if not self.state.base_image or self.state.base_image == self._presets[0]:
             threading.Thread(target=self._detect_ostree_async, daemon=True).start()
+        # Trigger background fetch if cache is missing or stale
+        self._maybe_auto_fetch()
 
     def _detect_ostree_async(self):
         try:
@@ -931,7 +1145,7 @@ class PageBase(Gtk.Box):
 
     def _apply_ostree_result(self, booted_image: str, layered_pkgs: list):
         if booted_image:
-            for i, preset in enumerate(BASE_PRESETS):
+            for i, preset in enumerate(self._presets):
                 if preset == booted_image:
                     self.dropdown.set_selected(i)
                     break
@@ -955,7 +1169,6 @@ class PageBase(Gtk.Box):
             "brave-browser": "curl -fsSL https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo -o /etc/yum.repos.d/brave-browser.repo",
         }
 
-        # Stage pending changes — don't modify state until user confirms
         self._pending_repos   = []
         self._pending_custom  = []
         self._pending_pkgs    = []
@@ -1002,7 +1215,6 @@ class PageBase(Gtk.Box):
         self.ostree_banner.set_visible(True)
 
     def _accept_ostree_detection(self, *_):
-        """Apply pending rpm-ostree detection results to state after user confirms."""
         for repo_name in self._pending_repos:
             self.state.repos.add(repo_name)
         for _frag, cmd in self._pending_custom:
@@ -1058,7 +1270,6 @@ class PageRepos(Gtk.Box):
         note.add_css_class("dim-label")
         self.append(note)
 
-        # ── Copr repositories ─────────────────────────────────────────────
         sep0 = Gtk.Separator()
         set_margins(sep0, top=16, bottom=8)
         self.append(sep0)
@@ -1204,7 +1415,6 @@ class PageRepos(Gtk.Box):
             self.custom_listbox.remove(row)
 
     def _move_custom_repo(self, _btn, direction: int):
-        """Move the selected custom repo up (-1) or down (+1) in the list."""
         row = self.custom_listbox.get_selected_row()
         if not row:
             return
@@ -1212,10 +1422,8 @@ class PageRepos(Gtk.Box):
         new_idx = idx + direction
         if new_idx < 0 or new_idx >= len(self.state.custom_repos):
             return
-        # Swap in state list
         lst = self.state.custom_repos
         lst[idx], lst[new_idx] = lst[new_idx], lst[idx]
-        # Rebuild listbox to reflect new order, restore selection
         clear_listbox(self.custom_listbox)
         for cmd in lst:
             self.custom_listbox.append(self._make_repo_row(cmd))
@@ -1275,7 +1483,6 @@ class PageRepos(Gtk.Box):
 # =============================================================================
 class PagePackages(Gtk.Box):
 
-    # Packages auto-managed by the wizard — never shown in the queue
     AUTO_MANAGED = {"dnf-command(copr)", "'dnf-command(copr)'"}
 
     def __init__(self, state: WizardState):
@@ -1294,7 +1501,6 @@ class PagePackages(Gtk.Box):
         self.notebook.set_vexpand(True)
         self.append(self.notebook)
 
-        # ── Install tab ───────────────────────────────────────────────────
         install_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         set_margins(install_page, top=10, bottom=8, start=8, end=8)
 
@@ -1311,7 +1517,6 @@ class PagePackages(Gtk.Box):
         isearch_box.append(self.install_spinner)
         install_page.append(isearch_box)
 
-        # ── Search status label — shown when search has no results or errors ──
         self.install_status_lbl = Gtk.Label(label="")
         self.install_status_lbl.set_xalign(0)
         self.install_status_lbl.add_css_class("dim-label")
@@ -1379,7 +1584,6 @@ class PagePackages(Gtk.Box):
 
         self.notebook.append_page(install_page, Gtk.Label(label="  Install  "))
 
-        # ── Remove tab ────────────────────────────────────────────────────
         remove_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         set_margins(remove_page, top=10, bottom=8, start=8, end=8)
 
@@ -1414,7 +1618,6 @@ class PagePackages(Gtk.Box):
 
         self.notebook.append_page(remove_page, Gtk.Label(label="  Remove  "))
 
-        # ── Queued changes summary ────────────────────────────────────────
         sel_frame = Gtk.Frame(label=" Queued Changes ")
         sel_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         set_margins(sel_outer, top=8, bottom=8, start=8, end=8)
@@ -1461,8 +1664,6 @@ class PagePackages(Gtk.Box):
         sel_outer.append(clear_btn)
         sel_frame.set_child(sel_outer)
         self.append(sel_frame)
-
-    # ── search ────────────────────────────────────────────────────────────
 
     def _add_manual_install(self, *_):
         name = self.manual_install_entry.get_text().strip()
@@ -1522,9 +1723,16 @@ class PagePackages(Gtk.Box):
 
     def _dnf_search(self, query: str) -> tuple[dict, str]:
         """
-        Returns (grouped_results, error_message).
-        error_message is '' on success or a human-readable explanation on failure.
-        grouped_results: {name: [(version, reponame, summary), ...]}
+        Search for packages using dnf5 exclusively.
+
+        Strategy:
+          1. dnf5 repoquery --cacheonly  (fast, structured, tab-separated output)
+          2. dnf5 repoquery              (live fetch if cache miss)
+          3. dnf5 search --cacheonly     (fallback if repoquery finds nothing)
+          4. dnf5 search                 (live fetch as last resort)
+
+        All four commands are dnf5-only. dnf (v4) has been a compatibility
+        shim on Fedora Atomic since F41 and is not targeted by this tool.
         """
         TIMEOUT = 15
 
@@ -1534,8 +1742,7 @@ class PagePackages(Gtk.Box):
         raw = []
         last_error = ""
 
-        # Try dnf5 repoquery first (most detailed output)
-        # Note: queryformat uses real tab/newline characters, NOT raw string
+        # ── Phase 1: repoquery (structured, preferred) ────────────────────
         for cache_flag in (["--cacheonly"], []):
             try:
                 out = subprocess.check_output(
@@ -1555,30 +1762,28 @@ class PagePackages(Gtk.Box):
                 if raw:
                     break
             except subprocess.TimeoutExpired:
-                last_error = "dnf5 timed out. The package cache may need refreshing."
+                last_error = "dnf5 timed out — the package cache may need refreshing."
                 continue
-            except (FileNotFoundError, subprocess.CalledProcessError):
+            except FileNotFoundError:
+                last_error = "dnf5 was not found. Is it installed?"
                 break
+            except subprocess.CalledProcessError:
+                break   # no results — fall through to search
 
-        # Fallback: text search via dnf5 or dnf
+        # ── Phase 2: dnf5 search (plain text, fallback) ───────────────────
         if not raw:
-            for cmd in (
-                ["dnf5", "search", "--cacheonly", "--quiet", query],
-                ["dnf5", "search", "--quiet", query],
-                ["dnf",  "search", "--cacheonly", "--quiet", query],
-                ["dnf",  "search", "--quiet", query],
-            ):
+            for cache_flag in (["--cacheonly"], []):
                 try:
                     out = subprocess.check_output(
-                        cmd, text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
+                        ["dnf5", "search", "--quiet"] + cache_flag + [query],
+                        text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
                     )
                     for line in out.splitlines():
-                        line = line.strip()   # strips leading space from dnf5 output
+                        line = line.strip()
                         if not line or line.startswith("Matched fields"):
                             continue
                         if "\t" in line:
                             pkg, _, summary = line.partition("\t")
-                            # strip arch suffix e.g. firefox.x86_64 → firefox
                             name = re.sub(r"\.(noarch|x86_64|i686|aarch64)$", "", pkg.strip())
                             raw.append((name.strip(), "", "", summary.strip()))
                         else:
@@ -1589,19 +1794,18 @@ class PagePackages(Gtk.Box):
                         last_error = ""
                         break
                 except subprocess.TimeoutExpired:
-                    last_error = "Package search timed out. Try again or add the package name manually."
+                    last_error = "Package search timed out — try again or add the package name manually."
                     continue
                 except FileNotFoundError:
-                    last_error = "Neither dnf5 nor dnf was found on this system."
-                    continue
+                    last_error = "dnf5 was not found. Is it installed?"
+                    break
                 except subprocess.CalledProcessError as e:
-                    last_error = f"Package search returned an error (exit {e.returncode})."
+                    last_error = f"dnf5 search returned an error (exit {e.returncode})."
                     continue
 
         if not raw and not last_error:
-            last_error = ""  # genuine empty result — not an error
+            last_error = ""
 
-        # Group by name, keep latest version per (name, repo)
         best = {}
         for name, ver, repo, summary in raw:
             key = (name, repo)
@@ -1752,7 +1956,6 @@ class PagePackages(Gtk.Box):
         row_box.append(chk)
         row_box.append(name_lbl)
         row_box.append(sum_lbl)
-        # Store handler id as a plain Python attribute for safe block/unblock
         chk._handler_id = chk.connect("toggled", on_toggle, pkg_key)
         return row_box
 
@@ -1838,9 +2041,6 @@ class PagePackages(Gtk.Box):
         listbox = (self.install_listbox
                    if pkg_list is self.state.install_pkgs
                    else self.remove_listbox)
-        on_toggle = (self._on_install_toggled
-                     if pkg_list is self.state.install_pkgs
-                     else self._on_remove_toggled)
         i = 0
         while True:
             row = listbox.get_row_at_index(i)
@@ -1881,7 +2081,6 @@ class PagePackages(Gtk.Box):
         self._sync_search_checkboxes()
 
     def _sync_search_checkboxes(self):
-        """Update checkboxes in visible search results to match current queue state."""
         for listbox, pkg_list, on_toggle in (
             (self.install_listbox, self.state.install_pkgs, self._on_install_toggled),
             (self.remove_listbox,  self.state.remove_pkgs,  self._on_remove_toggled),
@@ -2175,7 +2374,6 @@ class PageReview(Gtk.Box):
         self.page_build = page_build
         set_margins(self, top=8, bottom=8, start=12, end=12)
 
-        # ── Toolbar: tag + action buttons ─────────────────────────────────
         toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
 
         tag_row = Gtk.Box(spacing=8)
@@ -2197,7 +2395,6 @@ class PageReview(Gtk.Box):
         tag_row.append(build_btn)
         toolbar.append(tag_row)
 
-        # Pre-flight issues label
         self.preflight_lbl = Gtk.Label()
         self.preflight_lbl.set_xalign(0)
         self.preflight_lbl.set_wrap(True)
@@ -2206,7 +2403,6 @@ class PageReview(Gtk.Box):
 
         self.append(toolbar)
 
-        # ── Containerfile editor ──────────────────────────────────────────
         cf_frame = Gtk.Frame(label=" Containerfile (editable) ")
         cf_scroll = Gtk.ScrolledWindow()
         cf_scroll.set_size_request(-1, 500)
@@ -2228,7 +2424,6 @@ class PageReview(Gtk.Box):
         self._run_preflight()
 
     def _run_preflight(self):
-        """Check state and Containerfile content for problems before building."""
         issues = self.state.validate_for_build()
         cf_text = self._get_cf()
         cf_stripped = cf_text.strip()
@@ -2256,7 +2451,6 @@ class PageReview(Gtk.Box):
         )
 
     def _save(self) -> bool:
-        """Write the Containerfile to disk. Returns True on success."""
         path = os.path.join(SCRIPT_DIR, "Containerfile")
         try:
             with open(path, "w") as f:
@@ -2278,7 +2472,6 @@ class PageReview(Gtk.Box):
             d.present()
 
     def _save_and_build(self, *_):
-        # Re-run pre-flight on the current editor contents
         self._run_preflight()
         issues = self.state.validate_for_build()
         cf_text = self._get_cf().strip()
@@ -2333,7 +2526,6 @@ class PageBuild(Gtk.Box):
         self.log_frame.set_child(log_scroll)
         self.append(self.log_frame)
 
-        # ── Copy-log button ───────────────────────────────────────────────
         copy_btn = Gtk.Button(label="Copy log to clipboard")
         copy_btn.set_halign(Gtk.Align.END)
         copy_btn.set_margin_top(4)
@@ -2350,10 +2542,6 @@ class PageBuild(Gtk.Box):
         status_bar.append(self.status_lbl)
         self.append(status_bar)
 
-        # ── Deployment status panel — sits just above the Deploy button ───
-        # Populated on demand via Refresh so it doesn't trigger a polkit
-        # prompt on page entry. User clicks Refresh after a build, when
-        # polkit is already warm from the build itself.
         deploy_status_frame = Gtk.Frame(label=" Current Deployment Status ")
         deploy_status_frame.set_margin_top(10)
         deploy_status_grid = Gtk.Grid()
@@ -2386,7 +2574,6 @@ class PageBuild(Gtk.Box):
         self._new_image_lbl = _status_label("", dim=True)
         deploy_status_grid.attach(self._new_image_lbl, 1, 2, 1, 1)
 
-        # Refresh button inline with the grid
         refresh_btn = Gtk.Button(label="↺  Refresh status")
         refresh_btn.set_halign(Gtk.Align.END)
         refresh_btn.set_margin_top(4)
@@ -2409,7 +2596,6 @@ class PageBuild(Gtk.Box):
         self._new_image_lbl.set_text(self.state.image_tag or "localhost/atomic-custom:latest")
 
     def _refresh_deploy_status(self, *_):
-        """Called by the Refresh button — fetches bootc status in a background thread."""
         self._booted_lbl.set_text("Reading…")
         self._booted_lbl.add_css_class("dim-label")
         self._rollback_lbl.set_text("Reading…")
@@ -2417,11 +2603,8 @@ class PageBuild(Gtk.Box):
         threading.Thread(target=self._fetch_deploy_status_async, daemon=True).start()
 
     def _fetch_deploy_status_async(self):
-        """Fetch bootc status via pkexec and populate the deployment status panel.
-        This is the single privileged call for the whole Build page — the credential
-        it establishes with polkit covers the subsequent build command too."""
         try:
-            import json, shutil
+            import shutil
             prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
             out = subprocess.check_output(
                 prefix + ["bootc", "status", "--json"],
@@ -2434,13 +2617,10 @@ class PageBuild(Gtk.Box):
             def _parse_image(node):
                 if not node:
                     return None, None
-                # actual path: node.image.image.image (tag string)
-                #              node.image.timestamp   (ISO timestamp)
                 img_outer = node.get("image", {})
                 tag = img_outer.get("image", {}).get("image", "") or ""
                 tag = tag.replace("containers-storage:", "").strip()
                 ts  = img_outer.get("timestamp", "") or ""
-                # timestamp is like "2026-03-15T23:20:16.373179659Z"
                 date = ts[:16].replace("T", " ") if ts else ""
                 return tag, date
 
@@ -2453,7 +2633,6 @@ class PageBuild(Gtk.Box):
             GLib.idle_add(self._apply_deploy_status, None, None, None, None)
 
     def _apply_deploy_status(self, booted_tag, booted_date, rollback_tag, rollback_date):
-        # ── Booted ────────────────────────────────────────────────────────
         if booted_tag:
             text = booted_tag
             if booted_date:
@@ -2464,15 +2643,12 @@ class PageBuild(Gtk.Box):
             self._booted_lbl.set_text("Unable to read — is bootc installed?")
             self._booted_lbl.add_css_class("dim-label")
 
-        # ── Rollback ──────────────────────────────────────────────────────
         if rollback_tag:
             text = rollback_tag
             if rollback_date:
                 text += f"  (built {rollback_date})"
             text += "  ✓"
-            self._rollback_lbl.set_markup(
-                f"{GLib.markup_escape_text(text)}"
-            )
+            self._rollback_lbl.set_markup(f"{GLib.markup_escape_text(text)}")
             self._rollback_lbl.remove_css_class("dim-label")
         else:
             self._rollback_lbl.set_markup(
@@ -2497,8 +2673,6 @@ class PageBuild(Gtk.Box):
 
         path = os.path.join(SCRIPT_DIR, "Containerfile")
         prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
-        # --pull checks upstream for FROM image changes.
-        # No --no-cache so podman reuses cached layers when nothing has changed.
         build_cmd = prefix + [
             "podman", "build",
             "--pull",
@@ -2544,9 +2718,7 @@ class PageBuild(Gtk.Box):
         threading.Thread(target=self._inspect_image_async, args=(tag,), daemon=True).start()
 
     def _inspect_image_async(self, tag: str):
-        """Run podman image inspect — surface size/layers/date and capture the digest."""
         try:
-            import json
             out = subprocess.check_output(
                 ["podman", "image", "inspect", tag],
                 text=True, stderr=subprocess.DEVNULL, timeout=15
@@ -2653,13 +2825,13 @@ class PageBuild(Gtk.Box):
         self._pull_start    = None
 
         def start_pull_ticker(size_info: str):
-            import time
-            self._pull_start = time.monotonic()
+            import time as _time
+            self._pull_start = _time.monotonic()
             self._set_status(f"Downloading layers ({size_info})... 0s elapsed", spinning=True)
             def tick():
                 if self._pull_timer_id is None:
                     return False
-                elapsed = int(time.monotonic() - self._pull_start)
+                elapsed = int(_time.monotonic() - self._pull_start)
                 self._set_status(
                     f"Downloading layers ({size_info})... {elapsed}s elapsed", spinning=True)
                 return True
@@ -2794,10 +2966,7 @@ class PageBuild(Gtk.Box):
 
     def _log(self, text: str):
         self.log_buffer.insert(self.log_buffer.get_end_iter(), text)
-        # Scroll the log's own inner ScrolledWindow to follow output
         self.log_view.scroll_to_iter(self.log_buffer.get_end_iter(), 0.0, False, 0, 0)
-        # Also scroll the outer page ScrolledWindow so the status bar and
-        # deploy button stay visible as the log grows
         if self._outer_scroll:
             adj = self._outer_scroll.get_vadjustment()
             adj.set_value(adj.get_upper())
@@ -2823,16 +2992,14 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.maximize()
         self.state = WizardState()
 
-        # ── Detect existing Containerfile ─────────────────────────────────
         cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
         self._has_landing = os.path.exists(cf_path)
 
         page_build  = PageBuild(self.state, app)
         page_review = PageReview(self.state, page_build)
 
-        # Wizard pages — indices are stable regardless of landing presence
         wizard_pages = [
-            PageBase(self.state),        # 0 in wizard = index BASE_IDX overall
+            PageBase(self.state),
             PageRepos(self.state),
             PagePackages(self.state),
             PagePerformance(self.state),
@@ -2847,16 +3014,15 @@ class WizardWindow(Gtk.ApplicationWindow):
             self.BASE_IDX    = 1
             self.REPOS_IDX   = 2
             self.REVIEW_IDX  = 6
-            self.current     = 0   # start on landing page
+            self.current     = 0
         else:
             self.pages       = wizard_pages
             self.LANDING_IDX = None
             self.BASE_IDX    = 0
             self.REPOS_IDX   = 1
             self.REVIEW_IDX  = 5
-            self.current     = 0   # start on base image page
+            self.current     = 0
 
-        # ── Header bar ────────────────────────────────────────────────────
         hb = Gtk.HeaderBar()
         self.step_label = Gtk.Label()
         self.step_label.set_markup("<b>Atomic Image Wizard</b>")
@@ -2870,11 +3036,9 @@ class WizardWindow(Gtk.ApplicationWindow):
         hb.pack_end(self.next_btn)
         self.set_titlebar(hb)
 
-        # ── Root layout ───────────────────────────────────────────────────
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.set_child(root)
 
-        # Sidebar — hidden on landing page
         self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.sidebar.set_size_request(185, -1)
         self.sidebar.set_hexpand(False)
@@ -2886,7 +3050,6 @@ class WizardWindow(Gtk.ApplicationWindow):
         sidebar_title.set_margin_bottom(4)
         self.sidebar.append(sidebar_title)
 
-        # Start button — returns to landing page (if present) or Step 1
         self.start_btn = Gtk.Button(label="⟵  Start")
         self.start_btn.set_has_frame(False)
         self.start_btn.set_hexpand(True)
@@ -2906,7 +3069,6 @@ class WizardWindow(Gtk.ApplicationWindow):
             btn.connect("clicked", self._on_step_btn, i)
             self.sidebar.append(btn)
             self.step_btns.append(btn)
-
 
         self.sidebar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         root.append(self.sidebar)
@@ -2935,10 +3097,7 @@ class WizardWindow(Gtk.ApplicationWindow):
 
         self._update_ui()
 
-    # ── Cleanup utility ───────────────────────────────────────────────────
-
     def _run_cleanup(self, _btn, cmd: str, title: str, description: str):
-        """Run a privileged podman cleanup command and stream output into a dialog."""
         import shutil
 
         confirm_dlg = Gtk.MessageDialog(
@@ -2972,7 +3131,6 @@ class WizardWindow(Gtk.ApplicationWindow):
             scroll.set_child(log_view)
             vbox.append(scroll)
 
-            # ── Progress bar (pulse mode) ──────────────────────────────────
             progress = Gtk.ProgressBar()
             progress.set_pulse_step(0.08)
             progress.set_text("Working…")
@@ -2999,7 +3157,6 @@ class WizardWindow(Gtk.ApplicationWindow):
             prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
             full_cmd = prefix + cmd.split()
 
-            # Holds the GLib timer source ID so we can cancel it when done
             pulse_timer_id = [None]
 
             def stop_pulse():
@@ -3016,11 +3173,10 @@ class WizardWindow(Gtk.ApplicationWindow):
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                     )
 
-                    # Start pulsing once the process is running
                     def start_pulse():
                         def do_pulse():
                             progress.pulse()
-                            return True   # keep firing
+                            return True
                         pulse_timer_id[0] = GLib.timeout_add(80, do_pulse)
 
                     GLib.idle_add(start_pulse)
@@ -3068,12 +3224,10 @@ class WizardWindow(Gtk.ApplicationWindow):
         self._update_ui()
 
     def _go_start(self, *_):
-        """Return to the landing page if one exists, otherwise go to Step 1."""
         self.current = self.LANDING_IDX if self._has_landing else self.BASE_IDX
         self._update_ui()
 
     def _on_step_btn(self, _btn, index):
-        # Sidebar buttons use wizard-step indices — offset by 1 if landing present
         target = index + (1 if self._has_landing else 0)
         self.current = target
         self._update_ui()
@@ -3099,20 +3253,17 @@ class WizardWindow(Gtk.ApplicationWindow):
 
         on_landing = self._has_landing and self.current == self.LANDING_IDX
 
-        # Hide sidebar and nav buttons on the landing page
         self.sidebar.set_visible(not on_landing)
         self.sidebar_sep.set_visible(not on_landing)
         self.back_btn.set_visible(not on_landing)
         self.next_btn.set_visible(not on_landing)
 
-        # Start button only makes sense when there is a landing page to go back to
         self.start_btn.set_visible(self._has_landing)
 
         if on_landing:
             self.step_label.set_markup("<b>Atomic Image Wizard</b>")
             return
 
-        # Work out which wizard step we're on (0-based within wizard pages)
         wizard_idx = self.current - (1 if self._has_landing else 0)
         name = self.STEPS[wizard_idx][0]
         num  = self.STEPS[wizard_idx][1]
