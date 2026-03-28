@@ -11,7 +11,56 @@ without writing Containerfiles by hand.
 > to recover from a bad deployment before using this tool. Do not use it as your only
 > method of managing a machine you cannot afford to lose access to.
 
-[![Atomic Image Wizard](https://github.com/cvcassdev/atomic-image-wizard/raw/main/screenshot.png)](https://github.com/cvcassdev/atomic-image-wizard/blob/main/screenshot.png)
+## Screenshots
+
+<table>
+<tr>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/startpage.png" alt="Landing page"/>
+<br><em>Landing page — load existing build or start fresh</em>
+</td>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step1.png" alt="Step 1 — Base Image"/>
+<br><em>Step 1 — Choose base image from live registry list</em>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step2.png" alt="Step 2 — Repositories"/>
+<br><em>Step 2 — RPM Fusion, Copr, and custom repos</em>
+</td>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step3.png" alt="Step 3 — Packages"/>
+<br><em>Step 3 — Search and queue packages to install or remove</em>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step4.png" alt="Step 4 — Performance"/>
+<br><em>Step 4 — Optional CachyOS performance tweaks</em>
+</td>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step5.png" alt="Step 5 — Systemd"/>
+<br><em>Step 5 — Enable or disable services at boot</em>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step6.png" alt="Step 6 — Review"/>
+<br><em>Step 6 — Review and edit the generated Containerfile</em>
+</td>
+<td align="center" width="50%">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step7.png" alt="Step 7 — Build"/>
+<br><em>Step 7 — Build with podman and deploy with bootc</em>
+</td>
+</tr>
+<tr>
+<td align="center" colspan="2">
+<img src="https://github.com/cvcassdev/atomic-image-wizard/raw/main/step8.png" alt="Reboot prompt after successful deployment"/>
+<br><em>Successful deployment — prompted to reboot and apply the new image</em>
+</td>
+</tr>
+</table>
 
 ---
 
