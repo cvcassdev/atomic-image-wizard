@@ -862,10 +862,6 @@ class PageBase(Gtk.Box):
         self.entry.connect("changed", self._on_entry)
         self.append(self.entry)
 
-        search_btn = Gtk.Button(label="Search registry with podman search")
-        search_btn.connect("clicked", self._do_registry_search)
-        self.append(search_btn)
-
         frame = Gtk.Frame(label=" Preview ")
         frame.set_margin_top(12)
         self.preview = Gtk.Label(label="")
@@ -996,115 +992,6 @@ class PageBase(Gtk.Box):
         self.preview.set_text(f"FROM {self.state.base_image}")
 
     # ── Registry search (podman) ──────────────────────────────────────────
-
-    def _do_registry_search(self, *_):
-        win = self.get_root()
-        dlg = Gtk.Window(title="Searching...", modal=True, transient_for=win)
-        dlg.set_default_size(280, 80)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        set_margins(box, top=20, bottom=20, start=20, end=20)
-        sp = Gtk.Spinner()
-        sp.start()
-        box.append(sp)
-        box.append(Gtk.Label(label="Running podman search..."))
-        dlg.set_child(box)
-        dlg.present()
-
-        def worker():
-            try:
-                out = subprocess.check_output(
-                    ["podman", "search", "--limit", "40", "--format",
-                     "{{.Name}} : {{.Description}}", "fedora-ostree"],
-                    text=True, stderr=subprocess.DEVNULL
-                )
-                results = [l.strip() for l in out.splitlines() if l.strip() and ":" in l]
-            except FileNotFoundError:
-                GLib.idle_add(lambda: (dlg.close(),
-                    show_error(self.get_root(), "podman is not installed or not in PATH.")))
-                return
-            except Exception as e:
-                GLib.idle_add(lambda: (dlg.close(),
-                    show_error(self.get_root(), f"podman search failed:\n{e}")))
-                return
-            GLib.idle_add(lambda: self._show_search_results(dlg, results))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _show_search_results(self, loading_dlg, results):
-        loading_dlg.close()
-        win = self.get_root()
-        rwin = Gtk.Window(title="Registry Search Results", modal=True, transient_for=win)
-        rwin.set_default_size(900, 520)
-
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        set_margins(vbox, top=10, bottom=10, start=10, end=10)
-        rwin.set_child(vbox)
-
-        if not results:
-            vbox.append(Gtk.Label(label="No results returned by podman search."))
-            close_btn = Gtk.Button(label="Close")
-            close_btn.connect("clicked", lambda _: rwin.close())
-            vbox.append(close_btn)
-            rwin.present()
-            return
-
-        hint = Gtk.Label(label="Click a row to select it, then press Use Selected Image.")
-        hint.set_xalign(0)
-        vbox.append(hint)
-
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True)
-        listbox = Gtk.ListBox()
-        listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        listbox.add_css_class("boxed-list")
-        scroll.set_child(listbox)
-        vbox.append(scroll)
-
-        parsed = []
-        for r in results:
-            parts = r.split(" : ", 1)
-            name = parts[0].strip()
-            desc = parts[1].strip() if len(parts) > 1 else ""
-            parsed.append(name)
-
-            row_box = Gtk.Box(spacing=12)
-            set_margins(row_box, top=6, bottom=6, start=8, end=8)
-            name_lbl = Gtk.Label()
-            name_lbl.set_markup(f"<b>{GLib.markup_escape_text(name)}</b>")
-            name_lbl.set_xalign(0)
-            name_lbl.set_width_chars(44)
-            name_lbl.set_max_width_chars(44)
-            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            desc_lbl = Gtk.Label(label=desc)
-            desc_lbl.set_xalign(0)
-            desc_lbl.set_hexpand(True)
-            desc_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            desc_lbl.add_css_class("dim-label")
-            row_box.append(name_lbl)
-            row_box.append(desc_lbl)
-            listbox.append(row_box)
-
-        btn_box = Gtk.Box(spacing=8)
-        btn_box.set_halign(Gtk.Align.END)
-        cancel_btn = Gtk.Button(label="Cancel")
-        cancel_btn.connect("clicked", lambda _: rwin.close())
-        use_btn = Gtk.Button(label="Use Selected Image")
-        use_btn.add_css_class("suggested-action")
-        btn_box.append(cancel_btn)
-        btn_box.append(use_btn)
-        vbox.append(btn_box)
-
-        def use_selected(*_):
-            row = listbox.get_selected_row()
-            if row:
-                idx = row.get_index()
-                if 0 <= idx < len(parsed):
-                    self.entry.set_text(parsed[idx])
-                    rwin.close()
-
-        use_btn.connect("clicked", use_selected)
-        listbox.connect("row-activated", lambda lb, row: use_selected())
-        rwin.present()
 
     # ── rpm-ostree detection ──────────────────────────────────────────────
 
