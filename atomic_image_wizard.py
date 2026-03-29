@@ -674,7 +674,7 @@ class PageLanding(Gtk.Box):
         btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         btn_box.set_halign(Gtk.Align.CENTER)
 
-        def make_option(title_text, subtitle_text):
+        def make_option(title_text, subtitle_text, primary=False, destructive=False):
             frame = Gtk.Frame()
             frame.set_size_request(460, -1)
             frame.add_css_class("card")
@@ -683,6 +683,10 @@ class PageLanding(Gtk.Box):
             t = Gtk.Label()
             t.set_markup(f"<b>{GLib.markup_escape_text(title_text)}</b>")
             t.set_xalign(0)
+            if primary:
+                t.add_css_class("accent")
+            elif destructive:
+                t.add_css_class("error")
             s = Gtk.Label(label=subtitle_text)
             s.set_xalign(0)
             s.add_css_class("dim-label")
@@ -697,9 +701,9 @@ class PageLanding(Gtk.Box):
 
         upgrade_btn = make_option(
             "Upgrade / Rebuild",
-            "Rebuild the existing image as-is and go to Review before deploying."
+            "Rebuild the existing image as-is and go to Review before deploying.",
+            primary=True
         )
-        upgrade_btn.add_css_class("suggested-action")
         upgrade_btn.connect("clicked", self._do_upgrade)
         btn_box.append(upgrade_btn)
 
@@ -712,9 +716,9 @@ class PageLanding(Gtk.Box):
 
         new_btn = make_option(
             "New Build",
-            "Start completely fresh with a new base image and clean settings."
+            "Start completely fresh with a new base image and clean settings.",
+            destructive=True
         )
-        new_btn.add_css_class("destructive-action")
         new_btn.connect("clicked", self._do_new_build)
         btn_box.append(new_btn)
 
@@ -2457,9 +2461,13 @@ class PageBuild(Gtk.Box):
         self._rollback_lbl = _status_label("—", dim=True)
         deploy_status_grid.attach(self._rollback_lbl, 1, 1, 1, 1)
 
-        deploy_status_grid.attach(_status_label("<b>Will deploy as:</b>", markup=True), 0, 2, 1, 1)
+        deploy_status_grid.attach(_status_label("<b>Pinned:</b>", markup=True),       0, 2, 1, 1)
+        self._pinned_lbl = _status_label("—", dim=True)
+        deploy_status_grid.attach(self._pinned_lbl, 1, 2, 1, 1)
+
+        deploy_status_grid.attach(_status_label("<b>Will deploy as:</b>", markup=True), 0, 3, 1, 1)
         self._new_image_lbl = _status_label("", dim=True)
-        deploy_status_grid.attach(self._new_image_lbl, 1, 2, 1, 1)
+        deploy_status_grid.attach(self._new_image_lbl, 1, 3, 1, 1)
 
         refresh_btn = Gtk.Button(label="↺  Refresh status")
         refresh_btn.set_halign(Gtk.Align.END)
@@ -2467,7 +2475,7 @@ class PageBuild(Gtk.Box):
         refresh_btn.set_margin_bottom(4)
         refresh_btn.set_margin_end(8)
         refresh_btn.connect("clicked", self._refresh_deploy_status)
-        deploy_status_grid.attach(refresh_btn, 1, 3, 1, 1)
+        deploy_status_grid.attach(refresh_btn, 1, 4, 1, 1)
 
         deploy_status_frame.set_child(deploy_status_grid)
         self.append(deploy_status_frame)
@@ -2481,61 +2489,93 @@ class PageBuild(Gtk.Box):
 
     def on_enter(self):
         self._new_image_lbl.set_text(self.state.image_tag or "localhost/atomic-custom:latest")
+        self._refresh_deploy_status()
 
     def _refresh_deploy_status(self, *_):
         self._booted_lbl.set_text("Reading…")
         self._booted_lbl.add_css_class("dim-label")
         self._rollback_lbl.set_text("Reading…")
         self._rollback_lbl.add_css_class("dim-label")
+        self._pinned_lbl.set_text("Reading…")
+        self._pinned_lbl.add_css_class("dim-label")
         threading.Thread(target=self._fetch_deploy_status_async, daemon=True).start()
 
     def _fetch_deploy_status_async(self):
+        """Parse rpm-ostree status (no sudo required) to get deployment info."""
         try:
-            import shutil
-            prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
             out = subprocess.check_output(
-                prefix + ["bootc", "status", "--json"],
+                ["rpm-ostree", "status"],
                 text=True, stderr=subprocess.DEVNULL, timeout=15
             )
-            data = json.loads(out)
-            self.state.bootc_status_cache = data
-            spec = data.get("status", {})
+            deployments = []
+            current = None
+            for line in out.splitlines():
+                # A deployment block starts with '●' (booted) or '  ' (not booted)
+                if line.startswith("●") or (line.startswith(" ") and "ostree" in line and ":" in line):
+                    if current is not None:
+                        deployments.append(current)
+                    booted = line.startswith("●")
+                    # Extract image ref from the same line
+                    ref = line.lstrip("● ").strip()
+                    current = {"booted": booted, "ref": ref, "version": "", "date": "", "pinned": False}
+                elif current is not None:
+                    stripped = line.strip()
+                    if stripped.startswith("Version:"):
+                        parts = stripped.split(None, 1)
+                        if len(parts) == 2:
+                            # Version line: "44.20260329.0 (2026-03-29T05:04:41Z)"
+                            ver_parts = parts[1].split("(")
+                            current["version"] = ver_parts[0].strip()
+                            if len(ver_parts) > 1:
+                                current["date"] = ver_parts[1].rstrip(")").strip()[:16].replace("T", " ")
+                    elif stripped == "Pinned: yes":
+                        current["pinned"] = True
+            if current is not None:
+                deployments.append(current)
 
-            def _parse_image(node):
-                if not node:
+            booted   = next((d for d in deployments if d["booted"]), None)
+            rollback = next((d for d in deployments if not d["booted"] and not d["pinned"]), None)
+            pinned   = next((d for d in deployments if d["pinned"]), None)
+
+            def _fmt(d):
+                if not d:
                     return None, None
-                img_outer = node.get("image", {})
-                tag = img_outer.get("image", {}).get("image", "") or ""
-                tag = tag.replace("containers-storage:", "").strip()
-                ts  = img_outer.get("timestamp", "") or ""
-                date = ts[:16].replace("T", " ") if ts else ""
-                return tag, date
+                # Strip registry prefix for display
+                ref = d["ref"]
+                for prefix in ("ostree-unverified-image:", "ostree-image-signed:", "containers-storage:"):
+                    ref = ref.replace(prefix, "")
+                return ref.strip(), f"{d['version']}  ({d['date']})" if d["version"] else ""
 
-            booted_tag,   booted_date   = _parse_image(spec.get("booted"))
-            rollback_tag, rollback_date = _parse_image(spec.get("rollback"))
+            booted_ref,   booted_ver   = _fmt(booted)
+            rollback_ref, rollback_ver = _fmt(rollback)
+            pinned_ref,   pinned_ver   = _fmt(pinned)
+
             GLib.idle_add(self._apply_deploy_status,
-                          booted_tag, booted_date,
-                          rollback_tag, rollback_date)
+                          booted_ref, booted_ver,
+                          rollback_ref, rollback_ver,
+                          pinned_ref, pinned_ver)
         except Exception:
-            GLib.idle_add(self._apply_deploy_status, None, None, None, None)
+            GLib.idle_add(self._apply_deploy_status, None, None, None, None, None, None)
 
-    def _apply_deploy_status(self, booted_tag, booted_date, rollback_tag, rollback_date):
-        if booted_tag:
-            text = booted_tag
-            if booted_date:
-                text += f"  (built {booted_date})"
+    def _apply_deploy_status(self, booted_ref, booted_ver, rollback_ref, rollback_ver, pinned_ref, pinned_ver):
+        # Booted
+        if booted_ref:
+            text = booted_ref
+            if booted_ver:
+                text += f"\n{booted_ver}"
             self._booted_lbl.set_text(text)
             self._booted_lbl.remove_css_class("dim-label")
         else:
-            self._booted_lbl.set_text("Unable to read — is bootc installed?")
+            self._booted_lbl.set_text("Unable to read — is rpm-ostree installed?")
             self._booted_lbl.add_css_class("dim-label")
 
-        if rollback_tag:
-            text = rollback_tag
-            if rollback_date:
-                text += f"  (built {rollback_date})"
+        # Rollback
+        if rollback_ref:
+            text = rollback_ref
+            if rollback_ver:
+                text += f"\n{rollback_ver}"
             text += "  ✓"
-            self._rollback_lbl.set_markup(f"{GLib.markup_escape_text(text)}")
+            self._rollback_lbl.set_markup(GLib.markup_escape_text(text))
             self._rollback_lbl.remove_css_class("dim-label")
         else:
             self._rollback_lbl.set_markup(
@@ -2543,6 +2583,18 @@ class PageBuild(Gtk.Box):
                 "Your original Fedora image is still selectable from the boot menu.</span>"
             )
             self._rollback_lbl.remove_css_class("dim-label")
+
+        # Pinned
+        if pinned_ref:
+            text = pinned_ref
+            if pinned_ver:
+                text += f"\n{pinned_ver}"
+            text += "  📌"
+            self._pinned_lbl.set_text(text)
+            self._pinned_lbl.remove_css_class("dim-label")
+        else:
+            self._pinned_lbl.set_text("None")
+            self._pinned_lbl.add_css_class("dim-label")
 
     def _copy_log(self, *_):
         text = self.log_buffer.get_text(
