@@ -1409,6 +1409,12 @@ class PagePackages(Gtk.Box):
         isearch_box.append(self.install_spinner)
         install_page.append(isearch_box)
 
+        self.cache_status_lbl = Gtk.Label(label="")
+        self.cache_status_lbl.set_xalign(0)
+        self.cache_status_lbl.add_css_class("dim-label")
+        self.cache_status_lbl.set_visible(False)
+        install_page.append(self.cache_status_lbl)
+
         self.install_status_lbl = Gtk.Label(label="")
         self.install_status_lbl.set_xalign(0)
         self.install_status_lbl.add_css_class("dim-label")
@@ -1971,6 +1977,31 @@ class PagePackages(Gtk.Box):
         self._refresh_labels()
         self._sync_preset_buttons()
         self._sync_search_checkboxes()
+        self._refresh_dnf_cache()
+
+    def _refresh_dnf_cache(self):
+        """Run 'dnf5 makecache --timer' in the background when the page loads.
+
+        --timer skips the refresh if the cache is recent, so this is safe to
+        run every time without hammering mirrors.  No sudo required.
+        """
+        self.cache_status_lbl.set_text("Refreshing package cache…")
+        self.cache_status_lbl.set_visible(True)
+
+        def work():
+            try:
+                subprocess.run(
+                    ["dnf5", "makecache", "--timer"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass   # non-fatal — search will still try its own live fetch
+            finally:
+                GLib.idle_add(self.cache_status_lbl.set_visible, False)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _sync_search_checkboxes(self):
         for listbox, pkg_list, on_toggle in (
