@@ -238,8 +238,6 @@ from other spins is especially welcome.
 
 ## Known limitations
 
-* Package search uses dnf5 exclusively and requires Fedora 41+. If searches time out
-  or return no results, run `dnf5 makecache` in a terminal first.
 * The Containerfile parser handles common patterns well but may not recognise every
   custom RUN command — unrecognised commands are flagged with a warning rather than
   silently dropped.
