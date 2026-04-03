@@ -341,6 +341,43 @@ def show_error(parent, text: str):
     d.present()
 
 
+def _detect_deployed_tag() -> str | None:
+    """
+    Read rpm-ostree status and return the image tag of the booted local image,
+    or None if the booted image is not a locally built containers-storage image.
+
+    Parses the booted line (marked with ●) and strips all ostree transport
+    prefixes to extract the bare image reference, e.g.:
+      ● ostree-unverified-image:containers-storage:localhost/aurora-custom:latest
+    → "localhost/aurora-custom:latest"
+    """
+    try:
+        out = subprocess.check_output(
+            ["rpm-ostree", "status"],
+            text=True, stderr=subprocess.DEVNULL, timeout=10
+        )
+        for line in out.splitlines():
+            if not line.startswith("●"):
+                continue
+            # Strip the leading bullet and whitespace
+            ref = line.lstrip("● ").strip()
+            # Strip all known ostree transport prefixes
+            for prefix in (
+                "ostree-unverified-image:",
+                "ostree-image-signed:",
+                "containers-storage:",
+                "docker://",
+            ):
+                ref = ref.replace(prefix, "")
+            ref = ref.strip()
+            # Only use it if it looks like a local image tag
+            if ref.startswith("localhost/") and ":" in ref:
+                return ref
+    except Exception:
+        pass
+    return None
+
+
 # =============================================================================
 #  Containerfile parser
 # =============================================================================
@@ -767,6 +804,8 @@ class PageLanding(Gtk.Box):
             win._run_cleanup(btn, cmd, title, description)
 
     def _load_containerfile(self):
+        saved_tag = self.state.image_tag          # preserve before clearing
+
         self.state.install_pkgs.clear()
         self.state.remove_pkgs.clear()
         self.state.systemd_enable.clear()
@@ -784,6 +823,8 @@ class PageLanding(Gtk.Box):
 
         if base:
             self.state.base_image = base
+
+        self.state.image_tag = saved_tag          # restore after clearing
 
         if parser.warnings:
             win = self.get_root()
@@ -995,8 +1036,6 @@ class PageBase(Gtk.Box):
 
     def _refresh_preview(self):
         self.preview.set_text(f"FROM {self.state.base_image}")
-
-    # ── Registry search (podman) ──────────────────────────────────────────
 
     # ── rpm-ostree detection ──────────────────────────────────────────────
 
@@ -1620,18 +1659,6 @@ class PagePackages(Gtk.Box):
         threading.Thread(target=work, daemon=True).start()
 
     def _dnf_search(self, query: str) -> tuple[dict, str]:
-        """
-        Search for packages using dnf5 exclusively.
-
-        Strategy:
-          1. dnf5 repoquery --cacheonly  (fast, structured, tab-separated output)
-          2. dnf5 repoquery              (live fetch if cache miss)
-          3. dnf5 search --cacheonly     (fallback if repoquery finds nothing)
-          4. dnf5 search                 (live fetch as last resort)
-
-        All four commands are dnf5-only. dnf (v4) has been a compatibility
-        shim on Fedora Atomic since F41 and is not targeted by this tool.
-        """
         TIMEOUT = 15
 
         def ver_key(v):
@@ -1640,7 +1667,6 @@ class PagePackages(Gtk.Box):
         raw = []
         last_error = ""
 
-        # ── Phase 1: repoquery (structured, preferred) ────────────────────
         for cache_flag in (["--cacheonly"], []):
             try:
                 out = subprocess.check_output(
@@ -1666,9 +1692,8 @@ class PagePackages(Gtk.Box):
                 last_error = "dnf5 was not found. Is it installed?"
                 break
             except subprocess.CalledProcessError:
-                break   # no results — fall through to search
+                break
 
-        # ── Phase 2: dnf5 search (plain text, fallback) ───────────────────
         if not raw:
             for cache_flag in (["--cacheonly"], []):
                 try:
@@ -1980,11 +2005,6 @@ class PagePackages(Gtk.Box):
         self._refresh_dnf_cache()
 
     def _refresh_dnf_cache(self):
-        """Run 'dnf5 makecache --timer' in the background when the page loads.
-
-        --timer skips the refresh if the cache is recent, so this is safe to
-        run every time without hammering mirrors.  No sudo required.
-        """
         self.cache_status_lbl.set_text("Refreshing package cache…")
         self.cache_status_lbl.set_visible(True)
 
@@ -1997,7 +2017,7 @@ class PagePackages(Gtk.Box):
                     timeout=30,
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-                pass   # non-fatal — search will still try its own live fetch
+                pass
             finally:
                 GLib.idle_add(self.cache_status_lbl.set_visible, False)
 
@@ -2542,12 +2562,10 @@ class PageBuild(Gtk.Box):
             deployments = []
             current = None
             for line in out.splitlines():
-                # A deployment block starts with '●' (booted) or '  ' (not booted)
                 if line.startswith("●") or (line.startswith(" ") and "ostree" in line and ":" in line):
                     if current is not None:
                         deployments.append(current)
                     booted = line.startswith("●")
-                    # Extract image ref from the same line
                     ref = line.lstrip("● ").strip()
                     current = {"booted": booted, "ref": ref, "version": "", "date": "", "pinned": False}
                 elif current is not None:
@@ -2555,7 +2573,6 @@ class PageBuild(Gtk.Box):
                     if stripped.startswith("Version:"):
                         parts = stripped.split(None, 1)
                         if len(parts) == 2:
-                            # Version line: "44.20260329.0 (2026-03-29T05:04:41Z)"
                             ver_parts = parts[1].split("(")
                             current["version"] = ver_parts[0].strip()
                             if len(ver_parts) > 1:
@@ -2572,7 +2589,6 @@ class PageBuild(Gtk.Box):
             def _fmt(d):
                 if not d:
                     return None, None
-                # Strip registry prefix for display
                 ref = d["ref"]
                 for prefix in ("ostree-unverified-image:", "ostree-image-signed:", "containers-storage:"):
                     ref = ref.replace(prefix, "")
@@ -2590,7 +2606,6 @@ class PageBuild(Gtk.Box):
             GLib.idle_add(self._apply_deploy_status, None, None, None, None, None, None)
 
     def _apply_deploy_status(self, booted_ref, booted_ver, rollback_ref, rollback_ver, pinned_ref, pinned_ver):
-        # Booted
         if booted_ref:
             text = booted_ref
             if booted_ver:
@@ -2601,7 +2616,6 @@ class PageBuild(Gtk.Box):
             self._booted_lbl.set_text("Unable to read — is rpm-ostree installed?")
             self._booted_lbl.add_css_class("dim-label")
 
-        # Rollback
         if rollback_ref:
             text = rollback_ref
             if rollback_ver:
@@ -2616,7 +2630,6 @@ class PageBuild(Gtk.Box):
             )
             self._rollback_lbl.remove_css_class("dim-label")
 
-        # Pinned
         if pinned_ref:
             text = pinned_ref
             if pinned_ver:
@@ -2962,6 +2975,11 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.set_default_size(1100, 800)
         self.maximize()
         self.state = WizardState()
+
+        # Seed image_tag from the booted local image before anything else runs
+        detected_tag = _detect_deployed_tag()
+        if detected_tag:
+            self.state.image_tag = detected_tag
 
         cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
         self._has_landing = os.path.exists(cf_path)
