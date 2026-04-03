@@ -227,8 +227,8 @@ RUN systemctl enable tailscaled
 
 ## Current status
 
-Actively developed and tested on **Fedora 44 beta / Cosmic Atomic**. Builds and
-deploys successfully on current Fedora Atomic spins.
+Actively developed and tested on **Fedora 43-44 beta / Cosmic Atomic**, **Fedora 43-44 beta / Kinoite** , **Ublue Aurora:stable-latest**.
+Builds and deploys successfully on current Fedora Atomic spins.
 
 Behaviour on other spins (Silverblue, Kinoite, Sway Atomic) may differ slightly —
 particularly around default package sets and systemd service auto-detection. Feedback
