@@ -88,6 +88,16 @@ _CACHE_FILE = os.path.join(_CACHE_DIR, "presets.json")
 _CACHE_TTL  = 7 * 24 * 60 * 60   # 7 days in seconds
 
 
+# Sentinel prefix used to mark non-selectable header/separator rows in the
+# base-image dropdown.  Any string starting with this prefix is treated as a
+# visual divider — it is shown in the list but immediately rejected if the user
+# actually selects it, bouncing back to the previous valid entry.
+_DROPDOWN_HEADER_PREFIX = "─── "
+
+# Header row inserted into the preset list before the ublue section.
+_UBLUE_HEADER = "─── Universal Blue  (ghcr.io/ublue-os) " + "─" * 28
+
+
 def _build_base_presets() -> list[str]:
     """Hardcoded fallback list — used when registry is unreachable and no cache exists."""
     base  = "quay.io/fedora-ostree-desktops"
@@ -102,6 +112,47 @@ def _build_base_presets() -> list[str]:
             presets.append(f"{base}/{desktop}:{tag}")
         presets.append(f"{bootc}:{tag}")
     presets.append(f"{bootc}:latest")
+
+    # ── Universal Blue (ublue-os) images ─────────────────────────────────
+    # :stable = weekly updates on the current Fedora release (recommended)
+    # :latest = daily updates, ungated/cutting-edge kernel
+    # NVIDIA variants pre-bake the correct akmod for that kernel stream.
+    # Bluefin/Aurora use the open-source driver; Bazzite uses proprietary
+    # for best gaming compatibility.
+    presets.append(_UBLUE_HEADER)
+    presets += [
+        # Bluefin — GNOME workstation
+        "ghcr.io/ublue-os/bluefin:stable",
+        "ghcr.io/ublue-os/bluefin:latest",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
+        # Bluefin DX — GNOME + developer tooling (VS Code, Distrobox, VMs)
+        "ghcr.io/ublue-os/bluefin-dx:stable",
+        "ghcr.io/ublue-os/bluefin-dx:latest",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
+        # Aurora — KDE Plasma workstation
+        "ghcr.io/ublue-os/aurora:stable",
+        "ghcr.io/ublue-os/aurora:latest",
+        "ghcr.io/ublue-os/aurora-nvidia-open:stable",
+        "ghcr.io/ublue-os/aurora-nvidia-open:latest",
+        # Aurora DX — KDE + developer tooling
+        "ghcr.io/ublue-os/aurora-dx:stable",
+        "ghcr.io/ublue-os/aurora-dx:latest",
+        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
+        # Bazzite — gaming (KDE, proprietary NVIDIA for best game compat)
+        "ghcr.io/ublue-os/bazzite:stable",
+        "ghcr.io/ublue-os/bazzite:latest",
+        "ghcr.io/ublue-os/bazzite-nvidia:stable",
+        "ghcr.io/ublue-os/bazzite-nvidia:latest",
+        # Bazzite GNOME — gaming with GNOME desktop
+        "ghcr.io/ublue-os/bazzite-gnome:stable",
+        "ghcr.io/ublue-os/bazzite-gnome:latest",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia:latest",
+    ]
+
     return presets
 
 
@@ -242,7 +293,43 @@ def _fetch_presets_from_registry() -> list[str] | None:
     if "latest" in bootc_tags:
         presets.append(f"{bootc_ref}:latest")
 
-    return presets if presets else None
+    if not presets:
+        return None
+
+    # Always append Universal Blue presets — they are on ghcr.io, not Quay.io,
+    # so the registry fetch above will never return them.  Appending here
+    # ensures they survive a manual Refresh without a full app restart.
+    ublue = [
+        _UBLUE_HEADER,
+        "ghcr.io/ublue-os/bluefin:stable",
+        "ghcr.io/ublue-os/bluefin:latest",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
+        "ghcr.io/ublue-os/bluefin-dx:stable",
+        "ghcr.io/ublue-os/bluefin-dx:latest",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
+        "ghcr.io/ublue-os/aurora:stable",
+        "ghcr.io/ublue-os/aurora:latest",
+        "ghcr.io/ublue-os/aurora-nvidia-open:stable",
+        "ghcr.io/ublue-os/aurora-nvidia-open:latest",
+        "ghcr.io/ublue-os/aurora-dx:stable",
+        "ghcr.io/ublue-os/aurora-dx:latest",
+        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
+        "ghcr.io/ublue-os/bazzite:stable",
+        "ghcr.io/ublue-os/bazzite:latest",
+        "ghcr.io/ublue-os/bazzite-nvidia:stable",
+        "ghcr.io/ublue-os/bazzite-nvidia:latest",
+        "ghcr.io/ublue-os/bazzite-gnome:stable",
+        "ghcr.io/ublue-os/bazzite-gnome:latest",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia:latest",
+    ]
+    existing = set(presets)
+    presets += [p for p in ublue if p not in existing]
+
+    return presets
 
 
 # Initial preset list — populated from cache if available, otherwise hardcoded fallback.
@@ -865,6 +952,7 @@ class PageBase(Gtk.Box):
         self.state         = state
         self._presets      = list(BASE_PRESETS)   # local copy, updated on refresh
         self._fetching     = False
+        self._last_valid   = self._presets[0]     # tracks last non-header selection
         set_margins(self, top=12, bottom=12, start=16, end=16)
 
         self.append(make_header(
@@ -998,9 +1086,10 @@ class PageBase(Gtk.Box):
         new_model = Gtk.StringList.new(presets)
         self.dropdown.set_model(new_model)
 
-        # Restore selection to the previously chosen image if it still exists
+        # Restore selection to the previously chosen image if it still exists.
+        # Skip header/separator rows — they are not valid selections.
         for i, p in enumerate(presets):
-            if p == current_text:
+            if p == current_text and not p.startswith(_DROPDOWN_HEADER_PREFIX):
                 self.dropdown.set_selected(i)
                 return
         self.dropdown.set_selected(0)
@@ -1027,8 +1116,19 @@ class PageBase(Gtk.Box):
 
     def _on_dropdown(self, dd, _):
         item = dd.get_selected_item()
-        if item:
-            self.entry.set_text(item.get_string())
+        if not item:
+            return
+        text = item.get_string()
+        # Header/separator rows are not valid image references — bounce back
+        # to the last real selection instead of writing garbage to the entry.
+        if text.startswith(_DROPDOWN_HEADER_PREFIX):
+            for i, p in enumerate(self._presets):
+                if p == self._last_valid:
+                    dd.set_selected(i)
+                    return
+            return   # fallback: leave entry unchanged
+        self._last_valid = text
+        self.entry.set_text(text)
 
     def _on_entry(self, entry):
         self.state.base_image = entry.get_text().strip()
@@ -1076,11 +1176,13 @@ class PageBase(Gtk.Box):
 
     def _apply_ostree_result(self, booted_image: str, layered_pkgs: list):
         if booted_image:
+            # Skip header/separator rows when scanning for a preset match
             for i, preset in enumerate(self._presets):
-                if preset == booted_image:
+                if preset == booted_image and not preset.startswith(_DROPDOWN_HEADER_PREFIX):
                     self.dropdown.set_selected(i)
                     break
             self.state.base_image = booted_image
+            self._last_valid = booted_image
             self.entry.set_text(booted_image)
             self._refresh_preview()
 
