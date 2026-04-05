@@ -4,7 +4,8 @@ A step-by-step graphical wizard for creating custom Fedora Atomic / bootc images
 
 Designed for users new to atomic desktops who want to customise their system image
 without writing Containerfiles by hand. This tool can also be used to update your 
-custom bootc image by simply clicking 'Upgrade/Rebuild'.
+custom bootc image by simply clicking 'Upgrade/Rebuild'. It can also install software into
+the base image without rpm-ostree layering.
 
 > ⚠ **This project is in active development and has not had a stable release.**
 > It is being shared to gather feedback across different Fedora Atomic spins and
