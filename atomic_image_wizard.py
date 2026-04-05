@@ -121,20 +121,6 @@ def _build_base_presets() -> list[str]:
     # for best gaming compatibility.
     presets.append(_UBLUE_HEADER)
     presets += [
-        # Bluefin — GNOME workstation
-        "ghcr.io/ublue-os/bluefin:stable",
-        "ghcr.io/ublue-os/bluefin:stable-daily",
-        "ghcr.io/ublue-os/bluefin:latest",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
-        # Bluefin DX — GNOME + developer tooling (VS Code, Distrobox, VMs)
-        "ghcr.io/ublue-os/bluefin-dx:stable",
-        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx:latest",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
         # Aurora — KDE Plasma workstation
         "ghcr.io/ublue-os/aurora:stable",
         "ghcr.io/ublue-os/aurora:stable-daily",
@@ -149,16 +135,31 @@ def _build_base_presets() -> list[str]:
         "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable",
         "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable-daily",
         "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
-        # Bazzite — gaming (KDE, proprietary NVIDIA for best game compat)
+        # Bazzite — gaming (KDE). NVIDIA open module only — requires Turing/GTX 16
+        # series or newer (all RTX cards). Legacy GTX 900/1000 series not supported.
         "ghcr.io/ublue-os/bazzite:stable",
         "ghcr.io/ublue-os/bazzite:latest",
-        "ghcr.io/ublue-os/bazzite-nvidia:stable",
-        "ghcr.io/ublue-os/bazzite-nvidia:latest",
+        "ghcr.io/ublue-os/bazzite-nvidia-open:stable",
+        "ghcr.io/ublue-os/bazzite-nvidia-open:latest",
         # Bazzite GNOME — gaming with GNOME desktop
         "ghcr.io/ublue-os/bazzite-gnome:stable",
         "ghcr.io/ublue-os/bazzite-gnome:latest",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia:latest",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:latest",
+        # Bluefin — GNOME workstation
+        "ghcr.io/ublue-os/bluefin:stable",
+        "ghcr.io/ublue-os/bluefin:stable-daily",
+        "ghcr.io/ublue-os/bluefin:latest",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
+        # Bluefin DX — GNOME + developer tooling (VS Code, Distrobox, VMs)
+        "ghcr.io/ublue-os/bluefin-dx:stable",
+        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
+        "ghcr.io/ublue-os/bluefin-dx:latest",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
     ]
 
     return presets
@@ -309,18 +310,6 @@ def _fetch_presets_from_registry() -> list[str] | None:
     # ensures they survive a manual Refresh without a full app restart.
     ublue = [
         _UBLUE_HEADER,
-        "ghcr.io/ublue-os/bluefin:stable",
-        "ghcr.io/ublue-os/bluefin:stable-daily",
-        "ghcr.io/ublue-os/bluefin:latest",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
-        "ghcr.io/ublue-os/bluefin-dx:stable",
-        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx:latest",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
         "ghcr.io/ublue-os/aurora:stable",
         "ghcr.io/ublue-os/aurora:stable-daily",
         "ghcr.io/ublue-os/aurora:latest",
@@ -335,12 +324,24 @@ def _fetch_presets_from_registry() -> list[str] | None:
         "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
         "ghcr.io/ublue-os/bazzite:stable",
         "ghcr.io/ublue-os/bazzite:latest",
-        "ghcr.io/ublue-os/bazzite-nvidia:stable",
-        "ghcr.io/ublue-os/bazzite-nvidia:latest",
+        "ghcr.io/ublue-os/bazzite-nvidia-open:stable",
+        "ghcr.io/ublue-os/bazzite-nvidia-open:latest",
         "ghcr.io/ublue-os/bazzite-gnome:stable",
         "ghcr.io/ublue-os/bazzite-gnome:latest",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia:latest",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable",
+        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:latest",
+        "ghcr.io/ublue-os/bluefin:stable",
+        "ghcr.io/ublue-os/bluefin:stable-daily",
+        "ghcr.io/ublue-os/bluefin:latest",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
+        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
+        "ghcr.io/ublue-os/bluefin-dx:stable",
+        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
+        "ghcr.io/ublue-os/bluefin-dx:latest",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
+        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
     ]
     existing = set(presets)
     presets += [p for p in ublue if p not in existing]
@@ -494,7 +495,7 @@ class ContainerfileParser:
     PERF_COPR = "bieszczaders/kernel-cachyos-addons"
 
     SKIP_TOKENS = {"dnf5", "dnf", "install", "remove", "-y", "clean", "all", "&&", "\\",
-                   "--allowerasing", "repoquery", "config-manager", "--add-repo"}
+                   "--allowerasing", "--skip-unavailable", "repoquery", "config-manager", "--add-repo"}
 
     def __init__(self, path: str):
         self.path     = path
@@ -641,10 +642,32 @@ class WizardState:
         self.remove_pkgs     = []
         self.systemd_enable  = []
         self.systemd_disable = []
-        self.image_tag       = "localhost/atomic-custom:latest"
+        self.image_tag       = self.derive_image_tag(BASE_PRESETS[0])
         self.perf_cachyos_settings = False
         self.perf_ksm_settings     = False
         self.perf_scx_scheds       = False
+
+    @staticmethod
+    def derive_image_tag(base_image: str) -> str:
+        """
+        Derive a localhost image tag from the base image reference.
+
+        Strips the registry and org prefix, then combines the image name and
+        upstream tag into the local name, with ':custom' as a fixed qualifier.
+
+        Examples:
+          ghcr.io/ublue-os/bazzite-nvidia-open:stable  ->  localhost/bazzite-nvidia-open-stable:custom
+          quay.io/fedora-ostree-desktops/cosmic-atomic:44  ->  localhost/cosmic-atomic-44:custom
+          quay.io/fedora/fedora-bootc:latest  ->  localhost/fedora-bootc-latest:custom
+        """
+        # Strip registry + org: take only the final path component
+        name_and_tag = base_image.rsplit("/", 1)[-1]
+        # Split on ':' — if no tag present fall back to 'unknown'
+        if ":" in name_and_tag:
+            name, tag = name_and_tag.rsplit(":", 1)
+        else:
+            name, tag = name_and_tag, "unknown"
+        return f"localhost/{name}-{tag}:custom"
 
     def _fedora_ver(self) -> str:
         m = re.search(r":(\d+)$", self.base_image)
@@ -669,7 +692,7 @@ class WizardState:
         copr_repos = [r for r in self.copr_repos if r != "bieszczaders/kernel-cachyos-addons"]
 
         if copr_repos:
-            repo_parts.append("dnf5 install -y 'dnf5-command(copr)'")
+            repo_parts.append("dnf5 install -y --skip-unavailable 'dnf5-command(copr)'")
             for repo in copr_repos:
                 repo_parts.append(f"dnf5 copr enable -y {repo}")
 
@@ -683,7 +706,7 @@ class WizardState:
             if "RPM Fusion Non-Free" in self.repos:
                 rpms.append(RPM_FUSION_NONFREE_URL.format(ver=ver))
             rpm_lines = " \\\n        ".join(rpms)
-            repo_parts.append("dnf5 install -y \\\n        " + rpm_lines)
+            repo_parts.append("dnf5 install -y --skip-unavailable \\\n        " + rpm_lines)
 
         if repo_parts:
             repo_parts.append("dnf5 clean all")
@@ -713,7 +736,7 @@ class WizardState:
                 run_parts.append("dnf5 remove -y \\\n        " + pkgs)
             if has_install:
                 pkgs = " \\\n        ".join(sorted(install_list))
-                run_parts.append("dnf5 install -y \\\n        " + pkgs)
+                run_parts.append("dnf5 install -y --skip-unavailable \\\n        " + pkgs)
             run_parts.append("dnf5 clean all")
             out.append("RUN " + " \\\n    && ".join(run_parts))
 
@@ -729,7 +752,7 @@ class WizardState:
             out.append("")
             out += section(3, "Performance tweaks (CachyOS addons \u2014 requires kernel 6.12+)")
             perf_parts = [
-                "dnf5 install -y 'dnf5-command(copr)'",
+                "dnf5 install -y --skip-unavailable 'dnf5-command(copr)'",
                 "dnf5 copr enable -y bieszczaders/kernel-cachyos-addons",
                 "dnf5 install -y --allowerasing " + " \\\n        ".join(perf_pkgs),
                 "dnf5 clean all",
@@ -848,6 +871,13 @@ class PageLanding(Gtk.Box):
         upgrade_btn.connect("clicked", self._do_upgrade)
         btn_box.append(upgrade_btn)
 
+        switch_btn = make_option(
+            "Switch Image",
+            "Change the base image — upgrade to a new Fedora release or try a different spin."
+        )
+        switch_btn.connect("clicked", self._do_switch_image)
+        btn_box.append(switch_btn)
+
         add_btn = make_option(
             "Add Software",
             "Load the existing build and jump to Repositories to add or change software."
@@ -946,6 +976,14 @@ class PageLanding(Gtk.Box):
         if hasattr(win, "jump_to_page"):
             win.jump_to_page(win.REVIEW_IDX)
 
+    def _do_switch_image(self, *_):
+        # Load the existing Containerfile state so repos/packages are preserved,
+        # then land on the Base Image page so the user can change the FROM line.
+        self._load_containerfile()
+        win = self.get_root()
+        if hasattr(win, "jump_to_page"):
+            win.jump_to_page(win.BASE_IDX)
+
     def _do_add_software(self, *_):
         self._load_containerfile()
         win = self.get_root()
@@ -995,6 +1033,16 @@ class PageBase(Gtk.Box):
         dropdown_row.append(self.refresh_btn)
 
         self.append(dropdown_row)
+
+        # ── GPU driver hint — shown only for nvidia preset selections ─────
+        # Explains the open vs proprietary driver distinction in plain terms
+        # so users on current hardware pick the right image without guessing.
+        self.gpu_hint = Gtk.Label()
+        self.gpu_hint.set_xalign(0)
+        self.gpu_hint.set_wrap(True)
+        self.gpu_hint.add_css_class("dim-label")
+        self.gpu_hint.set_visible(False)
+        self.append(self.gpu_hint)
 
         # ── Cache status note ─────────────────────────────────────────────
         self.cache_note = Gtk.Label()
@@ -1145,10 +1193,39 @@ class PageBase(Gtk.Box):
             return   # fallback: leave entry unchanged
         self._last_valid = text
         self.entry.set_text(text)
+        self._update_gpu_hint(text)
+
+    def _update_gpu_hint(self, image: str):
+        """Show a contextual GPU driver hint when an nvidia variant is selected.
+        Check nvidia-open first — those strings also contain 'nvidia' as a substring."""
+        if "nvidia-open" in image:
+            if "bazzite" in image:
+                self.gpu_hint.set_text(
+                    "Requires Turing architecture or newer — GTX 16 series and all RTX cards. "
+                    "Legacy GTX 900/1000 series GPUs are not supported by Bazzite NVIDIA images. "
+                    "If your GPU is not supported, the non-NVIDIA Bazzite image is still available "
+                    "but Steam Gaming Mode will not be functional."
+                )
+            else:
+                self.gpu_hint.set_text(
+                    "Open kernel module — recommended for RTX 30 series and newer (40, 50 series). "
+                    "NVIDIA's actively developed driver path for current hardware."
+                )
+            self.gpu_hint.set_visible(True)
+        elif "nvidia" in image:
+            self.gpu_hint.set_text(
+                "Proprietary closed-source driver — best for GTX 900 through RTX 20 series. "
+                "Older hardware that lacks full open module support."
+            )
+            self.gpu_hint.set_visible(True)
+        else:
+            self.gpu_hint.set_visible(False)
 
     def _on_entry(self, entry):
         self.state.base_image = entry.get_text().strip()
+        self.state.image_tag  = WizardState.derive_image_tag(self.state.base_image)
         self._refresh_preview()
+        self._update_gpu_hint(self.state.base_image)
 
     def _refresh_preview(self):
         self.preview.set_text(f"FROM {self.state.base_image}")
@@ -1158,6 +1235,7 @@ class PageBase(Gtk.Box):
     def on_enter(self):
         self.entry.set_text(self.state.base_image)
         self._refresh_preview()
+        self._update_gpu_hint(self.state.base_image)
         if not self.state.base_image or self.state.base_image == self._presets[0]:
             threading.Thread(target=self._detect_ostree_async, daemon=True).start()
         # Trigger background fetch if cache is missing or stale
@@ -1198,6 +1276,7 @@ class PageBase(Gtk.Box):
                     self.dropdown.set_selected(i)
                     break
             self.state.base_image = booted_image
+            self.state.image_tag  = WizardState.derive_image_tag(booted_image)
             self._last_valid = booted_image
             self.entry.set_text(booted_image)
             self._refresh_preview()
@@ -1294,6 +1373,22 @@ class PageRepos(Gtk.Box):
             "Step 2 — Additional Repositories",
             "Enable extra repos before installing packages."
         ))
+
+        # Warning shown when a ublue base image is detected — RPM Fusion is
+        # already baked in to all ublue images so adding it here would cause
+        # duplicate repo definitions and potential version conflicts at build time.
+        self._rpmfusion_warning = Gtk.Label()
+        self._rpmfusion_warning.set_markup(
+            "<b>⚠  RPM Fusion is already included in Universal Blue images.</b>\n"
+            "Adding it here may cause duplicate repo definitions or version conflicts "
+            "during the build.  These options have been disabled for your base image."
+        )
+        self._rpmfusion_warning.set_wrap(True)
+        self._rpmfusion_warning.set_xalign(0)
+        self._rpmfusion_warning.set_margin_bottom(6)
+        self._rpmfusion_warning.add_css_class("warning")
+        self._rpmfusion_warning.set_visible(False)
+        self.append(self._rpmfusion_warning)
 
         self.checks = {}
         for repo_name, defn in REPO_DEFINITIONS.items():
@@ -1501,6 +1596,10 @@ class PageRepos(Gtk.Box):
                 self.state.copr_repos.remove(repo)
             self.copr_listbox.remove(row)
 
+    def _is_ublue_base(self) -> bool:
+        """Return True if the currently selected base image is a Universal Blue image."""
+        return self.state.base_image.startswith("ghcr.io/ublue-os/")
+
     def _on_rpmfusion_toggled(self, check, repo_name):
         if check.get_active():
             if repo_name == "RPM Fusion Non-Free" and "RPM Fusion Free" not in self.state.repos:
@@ -1514,8 +1613,25 @@ class PageRepos(Gtk.Box):
                 self.checks["RPM Fusion Non-Free"].set_active(False)
 
     def on_enter(self):
+        # ── RPM Fusion lockout for Universal Blue base images ────────────────
+        # ublue images ship RPM Fusion pre-baked; adding it again via dnf5 in
+        # the Containerfile causes duplicate repo definitions and can produce
+        # version conflicts at build time.  Detect the base image here (rather
+        # than at widget-construction time) so that switching images mid-session
+        # via the landing page "Switch Image" path is caught correctly.
+        is_ublue = self._is_ublue_base()
+        self._rpmfusion_warning.set_visible(is_ublue)
         for repo_name, check in self.checks.items():
-            check.set_active(repo_name in self.state.repos)
+            if is_ublue:
+                # Force-deselect and remove from state so they don't appear in
+                # the generated Containerfile even if previously selected.
+                check.set_active(False)
+                check.set_sensitive(False)
+                self.state.repos.discard(repo_name)
+            else:
+                check.set_sensitive(True)
+                check.set_active(repo_name in self.state.repos)
+
         clear_listbox(self.custom_listbox)
         for cmd in self.state.custom_repos:
             self.custom_listbox.append(self._make_repo_row(cmd))
@@ -2627,7 +2743,8 @@ class PageBuild(Gtk.Box):
         self._booted_lbl   = _status_label("—", dim=True)
         deploy_status_grid.attach(self._booted_lbl,   1, 0, 1, 1)
 
-        deploy_status_grid.attach(_status_label("<b>Rollback:</b>", markup=True),     0, 1, 1, 1)
+        self._rollback_hdr_lbl = _status_label("<b>Rollback:</b>", markup=True)
+        deploy_status_grid.attach(self._rollback_hdr_lbl,             0, 1, 1, 1)
         self._rollback_lbl = _status_label("—", dim=True)
         deploy_status_grid.attach(self._rollback_lbl, 1, 1, 1, 1)
 
@@ -2738,10 +2855,21 @@ class PageBuild(Gtk.Box):
             text = rollback_ref
             if rollback_ver:
                 text += f"\n{rollback_ver}"
-            text += "  ✓"
+            # If the non-booted image matches the tag we just built, it is staged
+            # and waiting for first boot — label it "Pending" not "Rollback".
+            # It only becomes a true rollback after the user boots into it.
+            pending_tag = (self.state.image_tag or "").strip()
+            is_pending  = bool(pending_tag and rollback_ref.strip() == pending_tag)
+            if is_pending:
+                self._rollback_hdr_lbl.set_markup("<b>Pending:</b>")
+                text += "  ⏳"
+            else:
+                self._rollback_hdr_lbl.set_markup("<b>Rollback:</b>")
+                text += "  ✓"
             self._rollback_lbl.set_markup(GLib.markup_escape_text(text))
             self._rollback_lbl.remove_css_class("dim-label")
         else:
+            self._rollback_hdr_lbl.set_markup("<b>Rollback:</b>")
             self._rollback_lbl.set_markup(
                 "<span foreground='#cc8800'>⚠ None — this may be your first switch. "
                 "Your original Fedora image is still selectable from the boot menu.</span>"
