@@ -40,6 +40,20 @@ success() { echo -e "${GREEN}  ✓${NC} $*"; }
 warn()    { echo -e "${YELLOW}  !${NC} $*"; }
 error()   { echo -e "${RED}  ✗ ERROR:${NC} $*"; exit 1; }
 
+# ── Find a Python with gi/GTK4 available ─────────────────────────────────────
+
+find_python() {
+    for py in /usr/bin/python3 /usr/bin/python3.* python3; do
+        if "$py" -c 'import gi' 2>/dev/null; then
+            echo "$py"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PYTHON=$(find_python) || PYTHON=""
+
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 
 if [[ "${1}" == "--uninstall" ]]; then
@@ -113,13 +127,19 @@ fi
 
 info "Checking dependencies..."
 
-if ! command -v python3 &>/dev/null; then
+if [[ -z "$PYTHON" ]]; then
     error "python3 is not installed. On Fedora Atomic it should always be present — something is wrong."
 fi
 
-if ! python3 -c "import gi; gi.require_version('Gtk', '4.0'); from gi.repository import Gtk" 2>/dev/null; then
+_gtk_check_err=$("$PYTHON" -c '
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+' 2>&1)
+if [[ $? -ne 0 ]]; then
     echo ""
     warn "PyGObject / GTK4 Python bindings not found."
+    warn "Check error: $_gtk_check_err"
     warn "This is required for the GUI to run."
     echo ""
     echo "  To install, add the following to your Containerfile and rebuild:"
@@ -133,7 +153,7 @@ if ! python3 -c "import gi; gi.require_version('Gtk', '4.0'); from gi.repository
     error "Missing dependency — install python3-gobject and gtk4 then re-run this installer."
 fi
 
-success "Dependencies OK"
+success "Dependencies OK (using $PYTHON)"
 
 # ── Create ~/bootc/ ───────────────────────────────────────────────────────────
 
@@ -210,7 +230,7 @@ Type=Application
 Name=Atomic Image Wizard
 GenericName=Container Image Builder
 Comment=Build custom Fedora Atomic / bootc container images
-Exec=$BOOTC_DIR/$SCRIPT_NAME
+Exec=$PYTHON $BOOTC_DIR/$SCRIPT_NAME
 Icon=$ICON_REF
 Terminal=false
 Categories=System;Settings;
