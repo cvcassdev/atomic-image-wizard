@@ -1695,7 +1695,7 @@ class PagePackages(Gtk.Box):
         manual_box.set_margin_top(2)
         manual_lbl = Gtk.Label(label="Add manually:")
         self.manual_install_entry = Gtk.Entry(
-            placeholder_text="package-name  (for Copr/custom repo packages)")
+            placeholder_text="package-name  (for Copr/custom repo packages) or @group-names")
         self.manual_install_entry.set_hexpand(True)
         self.manual_install_entry.connect("activate", self._add_manual_install)
         manual_add_btn = Gtk.Button(label="Add")
