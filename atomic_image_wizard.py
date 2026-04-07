@@ -928,8 +928,254 @@ class PageLanding(Gtk.Box):
         cleanup_box.append(prune_images_btn)
 
         inner.append(cleanup_box)
+
+        # ── Reset to Stock Image ──────────────────────────────────────────
+        reset_sep = Gtk.Separator()
+        reset_sep.set_margin_top(8)
+        reset_sep.set_margin_bottom(4)
+        inner.append(reset_sep)
+
+        reset_btn = Gtk.Button()
+        reset_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        set_margins(reset_inner, top=10, bottom=10, start=16, end=16)
+        reset_title = Gtk.Label()
+        reset_title.set_markup("<b>Reset to Stock Image</b>")
+        reset_title.set_xalign(0)
+        reset_title.add_css_class("error")
+        reset_sub = Gtk.Label(
+            label="Abandon local builds and switch back to a pre-built upstream image."
+        )
+        reset_sub.set_xalign(0)
+        reset_sub.add_css_class("dim-label")
+        reset_sub.set_wrap(True)
+        reset_inner.append(reset_title)
+        reset_inner.append(reset_sub)
+        reset_frame = Gtk.Frame()
+        reset_frame.set_size_request(460, -1)
+        reset_frame.add_css_class("card")
+        reset_frame.set_child(reset_inner)
+        reset_btn.set_child(reset_frame)
+        reset_btn.set_has_frame(False)
+        reset_btn.set_halign(Gtk.Align.CENTER)
+        reset_btn.connect("clicked", self._do_reset_to_stock)
+        inner.append(reset_btn)
+
         outer.append(inner)
         self.append(outer)
+
+    def _do_reset_to_stock(self, *_):
+        """Open the Reset to Stock Image modal dialog."""
+        import shutil
+
+        win = self.get_root()
+
+        # ── Outer dialog window ───────────────────────────────────────────
+        dlg = Gtk.Window(title="Reset to Stock Image", modal=True, transient_for=win)
+        dlg.set_default_size(560, -1)
+        dlg.set_resizable(False)
+        # Prevent closing via the window manager once the switch is running
+        dlg._running = False
+
+        def on_close_request(w):
+            return w._running   # True = block close, False = allow
+
+        dlg.connect("close-request", on_close_request)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        dlg.set_child(outer)
+
+        # ── Phase 1: Selection UI ─────────────────────────────────────────
+        phase1 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        set_margins(phase1, top=28, bottom=24, start=28, end=28)
+
+        icon_lbl = Gtk.Label()
+        icon_lbl.set_markup("<span size='xx-large'>⚠</span>")
+        icon_lbl.set_halign(Gtk.Align.CENTER)
+        phase1.append(icon_lbl)
+
+        title_lbl = Gtk.Label()
+        title_lbl.set_markup("<b><big>Reset to Stock Image</big></b>")
+        title_lbl.set_halign(Gtk.Align.CENTER)
+        phase1.append(title_lbl)
+
+        warn_lbl = Gtk.Label()
+        warn_lbl.set_markup(
+            "This will undo <b>all customizations</b> made with this wizard and return "
+            "your system to normal upstream update channels.\n\n"
+            "Select the stock image you want to switch to, then click "
+            "<b>Apply Changes</b>.\n\n"
+            "Your system will <b>reboot automatically</b> once the switch is complete."
+        )
+        warn_lbl.set_wrap(True)
+        warn_lbl.set_xalign(0)
+        warn_lbl.set_halign(Gtk.Align.FILL)
+        phase1.append(warn_lbl)
+
+        # Image dropdown — full preset list, same as wizard
+        presets = list(BASE_PRESETS)
+        dropdown = Gtk.DropDown.new_from_strings(presets)
+        dropdown.set_selected(Gtk.INVALID_LIST_POSITION)
+        dropdown.set_hexpand(True)
+        phase1.append(dropdown)
+
+        # Track last valid selection (skip header rows)
+        _state = {"selected_image": None, "last_valid_pos": None}
+
+        def on_dropdown_changed(dd, _param):
+            pos = dd.get_selected()
+            if pos == Gtk.INVALID_LIST_POSITION:
+                return
+            item = presets[pos]
+            if item.startswith(_DROPDOWN_HEADER_PREFIX):
+                # Bounce back to previous valid selection
+                if _state["last_valid_pos"] is not None:
+                    dd.set_selected(_state["last_valid_pos"])
+                else:
+                    dd.set_selected(Gtk.INVALID_LIST_POSITION)
+                return
+            _state["selected_image"] = item
+            _state["last_valid_pos"] = pos
+            apply_btn.set_sensitive(True)
+
+        dropdown.connect("notify::selected-item", on_dropdown_changed)
+
+        btn_row = Gtk.Box(spacing=10)
+        btn_row.set_halign(Gtk.Align.END)
+
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.connect("clicked", lambda _: dlg.close())
+        btn_row.append(cancel_btn)
+
+        apply_btn = Gtk.Button(label="Apply Changes")
+        apply_btn.add_css_class("destructive-action")
+        apply_btn.set_sensitive(False)
+        btn_row.append(apply_btn)
+
+        phase1.append(btn_row)
+        outer.append(phase1)
+
+        # ── Phase 2: Progress UI ──────────────────────────────────────────
+        phase2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        set_margins(phase2, top=28, bottom=24, start=28, end=28)
+        phase2.set_visible(False)
+
+        prog_spinner = Gtk.Spinner()
+        prog_spinner.set_halign(Gtk.Align.CENTER)
+        prog_spinner.set_size_request(48, 48)
+        phase2.append(prog_spinner)
+
+        prog_title = Gtk.Label()
+        prog_title.set_markup("<b><big>Switching image…</big></b>")
+        prog_title.set_halign(Gtk.Align.CENTER)
+        phase2.append(prog_title)
+
+        prog_status = Gtk.Label(label="Authenticating — please respond to the password prompt…")
+        prog_status.set_halign(Gtk.Align.CENTER)
+        prog_status.add_css_class("dim-label")
+        prog_status.set_wrap(True)
+        phase2.append(prog_status)
+
+        do_not_power = Gtk.Label(label="Do not power off your system.")
+        do_not_power.set_halign(Gtk.Align.CENTER)
+        do_not_power.add_css_class("dim-label")
+        phase2.append(do_not_power)
+
+        outer.append(phase2)
+
+        # ── Phase 3: Countdown UI ─────────────────────────────────────────
+        phase3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        set_margins(phase3, top=28, bottom=24, start=28, end=28)
+        phase3.set_visible(False)
+
+        done_icon = Gtk.Label()
+        done_icon.set_markup("<span size='xx-large'>✓</span>")
+        done_icon.set_halign(Gtk.Align.CENTER)
+        phase3.append(done_icon)
+
+        done_title = Gtk.Label()
+        done_title.set_markup("<b><big>Switch complete!</big></b>")
+        done_title.set_halign(Gtk.Align.CENTER)
+        phase3.append(done_title)
+
+        countdown_lbl = Gtk.Label()
+        countdown_lbl.set_halign(Gtk.Align.CENTER)
+        phase3.append(countdown_lbl)
+
+        outer.append(phase3)
+
+        # ── Apply button handler ──────────────────────────────────────────
+        def on_apply(_btn):
+            image = _state["selected_image"]
+            if not image:
+                return
+
+            # Switch to phase 2 — lock the dialog
+            dlg._running = True
+            phase1.set_visible(False)
+            phase2.set_visible(True)
+            prog_spinner.start()
+
+            prefix = ["pkexec"] if shutil.which("pkexec") else ["sudo"]
+            cmd = prefix + ["bootc", "switch", image]
+
+            def worker():
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                    )
+                    first = True
+                    for line in proc.stdout:
+                        if first:
+                            GLib.idle_add(prog_status.set_text, "Running bootc switch…")
+                            first = False
+                    proc.wait()
+
+                    if proc.returncode == 0:
+                        GLib.idle_add(start_countdown)
+                    else:
+                        GLib.idle_add(on_switch_failed, proc.returncode)
+                except Exception as e:
+                    GLib.idle_add(on_switch_failed, str(e))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        apply_btn.connect("clicked", on_apply)
+
+        # ── Countdown logic ───────────────────────────────────────────────
+        _countdown = {"remaining": 10, "timer_id": None}
+
+        def start_countdown():
+            prog_spinner.stop()
+            phase2.set_visible(False)
+            phase3.set_visible(True)
+            _tick_countdown()
+
+        def _tick_countdown():
+            n = _countdown["remaining"]
+            countdown_lbl.set_markup(
+                f"Rebooting in <b>{n}</b> second{'s' if n != 1 else ''}…"
+            )
+            if n <= 0:
+                subprocess.Popen(["systemctl", "reboot"])
+                return
+            _countdown["remaining"] -= 1
+            _countdown["timer_id"] = GLib.timeout_add(1000, _tick_countdown)
+
+        def on_switch_failed(detail):
+            dlg._running = False
+            prog_spinner.stop()
+            phase2.set_visible(False)
+            phase1.set_visible(True)
+            show_error(
+                dlg,
+                f"bootc switch failed ({detail}).\n\n"
+                "Your system has not been changed. You can try again or cancel."
+            )
+
+        dlg.present()
 
     def _run_cleanup(self, btn, cmd, title, description):
         win = self.get_root()
