@@ -376,6 +376,7 @@ PACKAGE_PRESETS = [
     ("VA-API utils (vainfo) [RF]",  ["libva-utils"], True, False),
     ("AMD ROCm OpenCL [RF]",    ["rocm-opencl"], False, True),
     ("Steam [RF-NF]",           ["steam"], True, True),
+    ("Qemu/KVM",                ["@virtualization"], False, False),
     ("htop + btop",             ["htop", "btop"], False, False),
     ("zsh",                     ["zsh"], False, False),
     ("fish shell",              ["fish"], False, False),
@@ -389,7 +390,6 @@ PACKAGE_PRESETS = [
     ("ripgrep",                 ["ripgrep"], False, False),
     ("fd-find",                 ["fd-find"], False, False),
     ("jq",                      ["jq"], False, False),
-    ("just",                    ["just"], False, False),
 ]
 
 
@@ -2701,8 +2701,10 @@ class PageSystemd(Gtk.Box):
         "firewalld":  ["firewalld"],
         "avahi":      ["avahi-daemon"],
         "cockpit":    ["cockpit.socket"],
-        "libvirt":    ["libvirtd", "virtlogd"],
-        "qemu":       ["libvirtd"],
+        "libvirt":         ["libvirtd"],
+        "@virtualization": ["libvirtd"],
+        "virt-manager":    ["libvirtd"],
+        "qemu":            ["libvirtd"],
         "nginx":      ["nginx"],
         "httpd":      ["httpd"],
         "mariadb":    ["mariadb"],
@@ -2770,13 +2772,30 @@ class PageSystemd(Gtk.Box):
         self.state.systemd_disable = self._buf_lines(self.dis_buffer)
 
     def _auto_enable_services(self):
+        # Build the full set of services that could be auto-mapped
+        all_mapped_services = set()
+        for svcs in self.PKG_SERVICE_MAP.values():
+            all_mapped_services.update(svcs)
+
+        # Build the set of services backed by currently installed packages
+        active_mapped = set()
         for pkg in self.state.install_pkgs:
             pkg_lower = pkg.lower()
             for fragment, svcs in self.PKG_SERVICE_MAP.items():
                 if fragment in pkg_lower:
-                    for svc in svcs:
-                        if svc not in self.state.systemd_enable and svc != SCX_SERVICE:
-                            self.state.systemd_enable.append(svc)
+                    active_mapped.update(svcs)
+
+        # Remove mapped services no longer backed by an installed package
+        # but leave any services the user added manually
+        self.state.systemd_enable = [
+            s for s in self.state.systemd_enable
+            if s not in all_mapped_services or s in active_mapped
+        ]
+
+        # Add services for current packages that aren't already in the list
+        for svc in active_mapped:
+            if svc not in self.state.systemd_enable and svc != SCX_SERVICE:
+                self.state.systemd_enable.append(svc)
 
     def on_enter(self):
         self._auto_enable_services()
