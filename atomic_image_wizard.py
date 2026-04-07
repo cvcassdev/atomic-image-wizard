@@ -937,8 +937,6 @@ class PageLanding(Gtk.Box):
             win._run_cleanup(btn, cmd, title, description)
 
     def _load_containerfile(self):
-        saved_tag = self.state.image_tag          # preserve before clearing
-
         self.state.install_pkgs.clear()
         self.state.remove_pkgs.clear()
         self.state.systemd_enable.clear()
@@ -956,8 +954,7 @@ class PageLanding(Gtk.Box):
 
         if base:
             self.state.base_image = base
-
-        self.state.image_tag = saved_tag          # restore after clearing
+            self.state.image_tag  = WizardState.derive_image_tag(base)
 
         if parser.warnings:
             win = self.get_root()
@@ -2596,8 +2593,12 @@ class PageReview(Gtk.Box):
         self.state.image_tag = entry.get_text().strip()
 
     def on_enter(self):
-        self.cf_buffer.set_text(self.state.generate_containerfile())
+        # Always re-derive the image tag from the current base image so it
+        # stays in sync with the new naming style regardless of how the user
+        # arrived at this page (landing upgrade path, step-through, etc.).
+        self.state.image_tag = WizardState.derive_image_tag(self.state.base_image)
         self.tag_entry.set_text(self.state.image_tag)
+        self.cf_buffer.set_text(self.state.generate_containerfile())
         self._run_preflight()
 
     def _run_preflight(self):
@@ -2855,9 +2856,6 @@ class PageBuild(Gtk.Box):
             text = rollback_ref
             if rollback_ver:
                 text += f"\n{rollback_ver}"
-            # If the non-booted image matches the tag we just built, it is staged
-            # and waiting for first boot — label it "Pending" not "Rollback".
-            # It only becomes a true rollback after the user boots into it.
             pending_tag = (self.state.image_tag or "").strip()
             is_pending  = bool(pending_tag and rollback_ref.strip() == pending_tag)
             if is_pending:
@@ -3221,11 +3219,6 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.set_default_size(1100, 800)
         self.maximize()
         self.state = WizardState()
-
-        # Seed image_tag from the booted local image before anything else runs
-        detected_tag = _detect_deployed_tag()
-        if detected_tag:
-            self.state.image_tag = detected_tag
 
         cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
         self._has_landing = os.path.exists(cf_path)
