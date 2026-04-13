@@ -60,10 +60,6 @@ PRESET_REPOS = [
      "-o /etc/yum.repos.d/brave-browser.repo"),
 ]
 
-# ── Fedora version constants — fallback only, used when registry is unreachable ─
-FEDORA_STABLE  = 43   # current stable release
-FEDORA_NEXT    = 44   # beta / branched
-
 # Service name used by scx-scheds — normalised to one constant everywhere
 SCX_SERVICE = "scx_loader.service"
 
@@ -96,73 +92,6 @@ _DROPDOWN_HEADER_PREFIX = "─── "
 
 # Header row inserted into the preset list before the ublue section.
 _UBLUE_HEADER = "─── Universal Blue  (ghcr.io/ublue-os) " + "─" * 28
-
-
-def _build_base_presets() -> list[str]:
-    """Hardcoded fallback list — used when registry is unreachable and no cache exists."""
-    base  = "quay.io/fedora-ostree-desktops"
-    bootc = "quay.io/fedora/fedora-bootc"
-    presets = []
-    for tag, _ in (
-        (FEDORA_STABLE, "stable"),
-        (FEDORA_NEXT,   "beta"),
-        ("rawhide",     "rawhide"),
-    ):
-        for desktop in _ATOMIC_DESKTOPS:
-            presets.append(f"{base}/{desktop}:{tag}")
-        presets.append(f"{bootc}:{tag}")
-    presets.append(f"{bootc}:latest")
-
-    # ── Universal Blue (ublue-os) images ─────────────────────────────────
-    # :stable = weekly updates on the current Fedora release (recommended)
-    # :latest = daily updates, ungated/cutting-edge kernel
-    # NVIDIA variants pre-bake the correct akmod for that kernel stream.
-    # Bluefin/Aurora use the open-source driver; Bazzite uses proprietary
-    # for best gaming compatibility.
-    presets.append(_UBLUE_HEADER)
-    presets += [
-        # Aurora — KDE Plasma workstation
-        "ghcr.io/ublue-os/aurora:stable",
-        "ghcr.io/ublue-os/aurora:stable-daily",
-        "ghcr.io/ublue-os/aurora:latest",
-        "ghcr.io/ublue-os/aurora-nvidia-open:stable",
-        "ghcr.io/ublue-os/aurora-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/aurora-nvidia-open:latest",
-        # Aurora DX — KDE + developer tooling
-        "ghcr.io/ublue-os/aurora-dx:stable",
-        "ghcr.io/ublue-os/aurora-dx:stable-daily",
-        "ghcr.io/ublue-os/aurora-dx:latest",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
-        # Bazzite — gaming (KDE). NVIDIA open module only — requires Turing/GTX 16
-        # series or newer (all RTX cards). Legacy GTX 900/1000 series not supported.
-        "ghcr.io/ublue-os/bazzite:stable",
-        "ghcr.io/ublue-os/bazzite:latest",
-        "ghcr.io/ublue-os/bazzite-nvidia-open:stable",
-        "ghcr.io/ublue-os/bazzite-nvidia-open:latest",
-        # Bazzite GNOME — gaming with GNOME desktop
-        "ghcr.io/ublue-os/bazzite-gnome:stable",
-        "ghcr.io/ublue-os/bazzite-gnome:latest",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable",
-        "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:latest",
-        # Bluefin — GNOME workstation
-        "ghcr.io/ublue-os/bluefin:stable",
-        "ghcr.io/ublue-os/bluefin:stable-daily",
-        "ghcr.io/ublue-os/bluefin:latest",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
-        # Bluefin DX — GNOME + developer tooling (VS Code, Distrobox, VMs)
-        "ghcr.io/ublue-os/bluefin-dx:stable",
-        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx:latest",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
-    ]
-
-    return presets
 
 
 def _load_cache() -> tuple[list[str] | None, bool, bool]:
@@ -349,13 +278,13 @@ def _fetch_presets_from_registry() -> list[str] | None:
     return presets
 
 
-# Initial preset list — populated from cache if available, otherwise hardcoded fallback.
-# PageBase will refresh this asynchronously on first run or when cache is stale.
+# Initial preset list — populated from cache if available, otherwise empty until
+# the async registry fetch completes on first run.
 def _initial_presets() -> list[str]:
     cached, _fresh, found = _load_cache()
     if found:
         return cached
-    return _build_base_presets()
+    return []
 
 
 BASE_PRESETS = _initial_presets()
@@ -673,9 +602,9 @@ class WizardState:
         m = re.search(r":(\d+)$", self.base_image)
         if m:
             return m.group(1)
-        if "rawhide" in self.base_image.lower():
-            return str(FEDORA_STABLE)
-        return str(FEDORA_STABLE)
+        # Non-numeric tags (rawhide, latest, stable) — fall back to current stable
+        # for RPM Fusion URL construction. Update when Fedora stable advances.
+        return "43"
 
     def generate_containerfile(self) -> str:
         DIVIDER = "# " + "\u2500" * 62
