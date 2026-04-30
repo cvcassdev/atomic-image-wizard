@@ -1,13 +1,13 @@
 # Atomic Image Wizard
 
-A step-by-step graphical wizard for creating custom Fedora Atomic / bootc images.
+A graphical tool for managing custom Fedora Atomic / bootc images on your local machine.
 
-Designed for users new to atomic desktops who want to customise their system image
-without writing Containerfiles by hand. This tool can also be used to update your 
-custom bootc image by simply clicking 'Upgrade/Rebuild'. It can also install software into
-the base image without rpm-ostree layering.
+Atomic Image Wizard handles the full lifecycle of a custom bootc image — building from
+scratch, adding or removing software, updating to the latest base, and deploying with
+bootc — all through a clean GTK4 interface. No Containerfile editing, no terminal
+commands, no rpm-ostree layering. Your image, your configuration, managed locally.
 
-> ⚠ **This project is in active development and has not had a stable release.**
+> ⚠ **This project is in active development.**
 > It is being shared to gather feedback across different Fedora Atomic spins and
 > configurations. You should be comfortable using `bootc rollback` and the boot menu
 > to recover from a bad deployment before using this tool. Do not use it as your only
@@ -138,7 +138,8 @@ Containerfiles live there.
 ## What it does
 
 Walks you through seven steps to produce a custom bootc image based on any Fedora
-Atomic base:
+Atomic base, and provides a one-click **Update Image** path to rebuild and redeploy
+your existing configuration without revisiting any steps:
 
 1. **Base Image** — choose from a dynamically fetched list of official Fedora Atomic images, or enter any custom registry URL
 2. **Repositories** — enable RPM Fusion, Copr repos, or any custom repo setup command
@@ -229,12 +230,11 @@ RUN systemctl enable tailscaled
 
 ## Current status
 
-Actively developed and tested on **Fedora 43-44 beta / Cosmic Atomic**, **Fedora 43-44 beta / Kinoite** , **Ublue Aurora:stable-latest**.
-Builds and deploys successfully on current Fedora Atomic spins.
+Actively developed and tested across multiple Fedora Atomic spins and desktop
+environments. Builds and deploys successfully on current Fedora Atomic releases.
 
-Behaviour on other spins (Silverblue, Kinoite, Sway Atomic) may differ slightly —
-particularly around default package sets and systemd service auto-detection. Feedback
-from other spins is especially welcome.
+Feedback from users on different spins is especially welcome — particularly around
+default package sets and systemd service auto-detection behaviour.
 
 ---
 
