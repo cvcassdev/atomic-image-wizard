@@ -793,8 +793,8 @@ class PageLanding(Gtk.Box):
             return btn
 
         upgrade_btn = make_option(
-            "Upgrade / Rebuild",
-            "Rebuild the existing image as-is and go to Review before deploying.",
+            "Update Image",
+            "Rebuild the existing image as-is using the current Containerfile.",
             primary=True
         )
         upgrade_btn.connect("clicked", self._do_upgrade)
@@ -1145,8 +1145,31 @@ class PageLanding(Gtk.Box):
     def _do_upgrade(self, *_):
         self._load_containerfile()
         win = self.get_root()
-        if hasattr(win, "jump_to_page"):
-            win.jump_to_page(win.REVIEW_IDX)
+        if not hasattr(win, "go_to_build"):
+            return
+
+        # Save the Containerfile before jumping to build (review page normally does this)
+        cf_path = os.path.join(SCRIPT_DIR, "Containerfile")
+        cf_text = self.state.generate_containerfile()
+        try:
+            with open(cf_path, "w") as f:
+                f.write(cf_text)
+        except Exception as e:
+            show_error(win, f"Could not save Containerfile:\n{e}")
+            return
+
+        # Derive the tag so the notice is accurate
+        tag = self.state.image_tag or WizardState.derive_image_tag(self.state.base_image)
+
+        # Kick off the build with the summary notice before navigating to the build page
+        page_build = win.pages[-1]
+        page_build.start_build(
+            tag,
+            show_notice=True,
+            notice_base=self.state.base_image,
+            notice_tag=tag,
+        )
+        win.go_to_build()
 
     def _do_switch_image(self, *_):
         # Load the existing Containerfile state so repos/packages are preserved,
@@ -2904,6 +2927,21 @@ class PageBuild(Gtk.Box):
         copy_btn.connect("clicked", self._copy_log)
         self.append(copy_btn)
 
+        # Notice banner — shown only for the Update Image fast-path
+        self._notice_frame = Gtk.Frame()
+        self._notice_frame.add_css_class("card")
+        self._notice_frame.set_margin_top(6)
+        self._notice_frame.set_margin_bottom(2)
+        _notice_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        set_margins(_notice_box, top=10, bottom=10, start=14, end=14)
+        self._notice_lbl = Gtk.Label()
+        self._notice_lbl.set_xalign(0)
+        self._notice_lbl.set_wrap(True)
+        _notice_box.append(self._notice_lbl)
+        self._notice_frame.set_child(_notice_box)
+        self._notice_frame.set_visible(False)
+        self.append(self._notice_frame)
+
         status_bar = Gtk.Box(spacing=8)
         status_bar.set_margin_top(6)
         self.status_spinner = Gtk.Spinner()
@@ -3088,8 +3126,26 @@ class PageBuild(Gtk.Box):
         if display:
             display.get_clipboard().set(text)
 
-    def start_build(self, tag: str):
+    def show_notice(self, base_image: str, image_tag: str) -> None:
+        """Display a brief summary banner above the password prompt for the Update Image path."""
+        self._notice_lbl.set_markup(
+            f"<b><big>Update Image</big></b>  —  <b>rebuilding current configuration</b>\n"
+            f"<b>Base:</b>  <tt>{GLib.markup_escape_text(base_image)}</tt>\n"
+            f"<b>Tag:</b>    <tt>{GLib.markup_escape_text(image_tag)}</tt>"
+        )
+        self._notice_frame.set_visible(True)
+
+    def hide_notice(self) -> None:
+        self._notice_frame.set_visible(False)
+
+    def start_build(self, tag: str, *, show_notice: bool = False,
+                    notice_base: str = "", notice_tag: str = ""):
         import shutil
+        # Show or hide the summary banner depending on the call path
+        if show_notice and notice_base:
+            self.show_notice(notice_base, notice_tag or tag)
+        else:
+            self.hide_notice()
         self.deploy_btn.set_visible(False)
         self.log_buffer.set_text("")
 
