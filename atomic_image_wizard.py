@@ -22,6 +22,15 @@ import urllib.error
 # =============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Preferences file lives alongside the wizard in ~/bootc/ for self-containment
+_PREFS_FILE = os.path.join(SCRIPT_DIR, "aiw_prefs.json")
+
+# Bodhi API — used for kernel version checks
+_BODHI_UPDATES_URL = (
+    "https://bodhi.fedoraproject.org/updates/"
+    "?packages=kernel&status=stable&rows_per_page=5"
+)
+
 RPM_FUSION_FREE_URL    = "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{ver}.noarch.rpm"
 RPM_FUSION_NONFREE_URL = "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{ver}.noarch.rpm"
 
@@ -409,6 +418,142 @@ def _detect_deployed_tag() -> str | None:
     except Exception:
         pass
     return None
+
+
+# =============================================================================
+#  Preferences
+# =============================================================================
+
+def _load_prefs() -> dict:
+    """Load preferences from ~/bootc/aiw_prefs.json. Returns defaults if missing."""
+    defaults = {"kernel_check_enabled": False}
+    try:
+        with open(_PREFS_FILE) as f:
+            data = json.load(f)
+        defaults.update(data)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return defaults
+
+
+def _save_prefs(prefs: dict) -> None:
+    """Write preferences to ~/bootc/aiw_prefs.json."""
+    try:
+        with open(_PREFS_FILE, "w") as f:
+            json.dump(prefs, f, indent=2)
+    except OSError:
+        pass
+
+
+# =============================================================================
+#  Kernel update check
+# =============================================================================
+
+def _get_running_kernel() -> str:
+    """Return the running kernel version string from uname -r."""
+    try:
+        return subprocess.check_output(
+            ["uname", "-r"], text=True, timeout=5
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _get_fedora_release() -> str:
+    """Return the current Fedora release number, e.g. '42'."""
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("VERSION_ID="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_kernel_version(ver_str: str) -> tuple:
+    """
+    Parse a kernel version string into a tuple for comparison.
+    e.g. '6.14.4-200.fc42.x86_64' -> (6, 14, 4, 200)
+    """
+    nums = re.findall(r"\d+", ver_str)
+    try:
+        return tuple(int(n) for n in nums[:4])
+    except (ValueError, TypeError):
+        return (0,)
+
+
+def _fetch_latest_fedora_kernel(release: str) -> str | None:
+    """
+    Query the Bodhi API for the latest stable kernel version for the given
+    Fedora release. Returns the version string or None on failure.
+    """
+    url = (
+        f"https://bodhi.fedoraproject.org/updates/"
+        f"?packages=kernel&status=stable&releases=F{release}&rows_per_page=5"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode())
+        updates = data.get("updates", [])
+        versions = []
+        for update in updates:
+            for build in update.get("builds", []):
+                nvr = build.get("nvr", "")
+                # nvr is like: kernel-6.14.4-200.fc42
+                m = re.match(r"^kernel-(.+)$", nvr)
+                if m:
+                    versions.append(m.group(1))
+        if not versions:
+            return None
+        # Return the highest version
+        versions.sort(key=_parse_kernel_version, reverse=True)
+        return versions[0]
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, KeyError):
+        return None
+
+
+def _check_kernel_update_and_notify() -> None:
+    """
+    Background thread: compare running kernel against latest Fedora stable.
+    Fires a notify-send desktop notification if a newer kernel is available.
+    """
+    release = _get_fedora_release()
+    if not release:
+        return
+
+    running = _get_running_kernel()
+    if not running:
+        return
+
+    latest = _fetch_latest_fedora_kernel(release)
+    if not latest:
+        return
+
+    # Strip arch suffix from running kernel for fair comparison
+    # e.g. '6.13.9-200.fc42.x86_64' -> '6.13.9-200.fc42'
+    running_clean = re.sub(r"\.(x86_64|aarch64|i686)$", "", running)
+
+    running_ver = _parse_kernel_version(running_clean)
+    latest_ver  = _parse_kernel_version(latest)
+
+    if latest_ver > running_ver:
+        body = (
+            f"Fedora {release} kernel {latest} is available.\n"
+            f"Your system is running {running_clean}.\n"
+            "Consider rebuilding your image."
+        )
+        try:
+            subprocess.Popen([
+                "notify-send",
+                "--app-name=Atomic Image Wizard",
+                "--icon=system-software-update",
+                "Kernel update available",
+                body,
+            ])
+        except (FileNotFoundError, OSError):
+            pass  # notify-send not available — silent fail
 
 
 # =============================================================================
@@ -3512,7 +3657,70 @@ class WizardWindow(Gtk.ApplicationWindow):
         self.next_btn.connect("clicked", self._go_next)
         hb.pack_start(self.back_btn)
         hb.pack_end(self.next_btn)
+
+        # ── Preferences gear button ───────────────────────────────────────
+        self._prefs = _load_prefs()
+
+        gear_btn = Gtk.MenuButton()
+        gear_btn.set_icon_name("preferences-system-symbolic")
+        gear_btn.set_tooltip_text("Preferences")
+
+        prefs_popover = Gtk.Popover()
+        prefs_popover.set_has_arrow(True)
+
+        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        set_margins(pop_box, top=14, bottom=14, start=16, end=16)
+
+        pop_title = Gtk.Label()
+        pop_title.set_markup("<b>Preferences</b>")
+        pop_title.set_xalign(0)
+        pop_box.append(pop_title)
+
+        pop_sep = Gtk.Separator()
+        pop_sep.set_margin_bottom(2)
+        pop_box.append(pop_sep)
+
+        # ── Kernel check row ──────────────────────────────────────────────
+        kernel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        kernel_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        kernel_text.set_hexpand(True)
+
+        kernel_title_lbl = Gtk.Label()
+        kernel_title_lbl.set_markup("<b>Check for kernel updates on launch</b>")
+        kernel_title_lbl.set_xalign(0)
+        kernel_text.append(kernel_title_lbl)
+
+        kernel_desc_lbl = Gtk.Label(
+            label="Compares your running kernel against the latest\n"
+                  "stable Fedora release via the Bodhi API.\n"
+                  "Sends a desktop notification if a newer kernel\n"
+                  "is available. Fedora-based images only."
+        )
+        kernel_desc_lbl.set_xalign(0)
+        kernel_desc_lbl.add_css_class("dim-label")
+        kernel_text.append(kernel_desc_lbl)
+
+        self._kernel_check_switch = Gtk.Switch()
+        self._kernel_check_switch.set_valign(Gtk.Align.CENTER)
+        self._kernel_check_switch.set_active(self._prefs.get("kernel_check_enabled", False))
+        self._kernel_check_switch.connect("state-set", self._on_kernel_check_toggled)
+
+        kernel_row.append(kernel_text)
+        kernel_row.append(self._kernel_check_switch)
+        pop_box.append(kernel_row)
+
+        prefs_popover.set_child(pop_box)
+        prefs_popover.set_size_request(320, -1)
+        gear_btn.set_popover(prefs_popover)
+        hb.pack_end(gear_btn)
+
         self.set_titlebar(hb)
+
+        # ── Kernel check on launch (if enabled) ───────────────────────────
+        if self._prefs.get("kernel_check_enabled", False):
+            threading.Thread(
+                target=_check_kernel_update_and_notify, daemon=True
+            ).start()
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.set_child(root)
@@ -3574,6 +3782,11 @@ class WizardWindow(Gtk.ApplicationWindow):
         page_build._outer_scroll = self.outer_scroll
 
         self._update_ui()
+
+    def _on_kernel_check_toggled(self, switch, state):
+        self._prefs["kernel_check_enabled"] = state
+        _save_prefs(self._prefs)
+        return False
 
     def _run_cleanup(self, _btn, cmd: str, title: str, description: str):
         import shutil
