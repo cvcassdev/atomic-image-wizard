@@ -426,7 +426,7 @@ def _detect_deployed_tag() -> str | None:
 
 def _load_prefs() -> dict:
     """Load preferences from ~/bootc/aiw_prefs.json. Returns defaults if missing."""
-    defaults = {"kernel_check_enabled": False}
+    defaults = {"kernel_check_enabled": False, "security_updates_enabled": False}
     try:
         with open(_PREFS_FILE) as f:
             data = json.load(f)
@@ -838,6 +838,11 @@ class WizardState:
                     " && printf '" + cfg + "' > /etc/scx_loader/config.toml"
                 )
             out.append("RUN " + " \\\n    && ".join(perf_parts))
+
+        if _load_prefs().get("security_updates_enabled", False):
+            out.append("")
+            out += section(3 if not perf_pkgs else 4, "Security updates")
+            out.append("RUN dnf5 update --security -y \\\n    && dnf5 clean all")
 
         enable  = [s for s in self.systemd_enable if s != SCX_SERVICE]
         disable = list(self.systemd_disable)
@@ -3709,6 +3714,43 @@ class WizardWindow(Gtk.ApplicationWindow):
         kernel_row.append(self._kernel_check_switch)
         pop_box.append(kernel_row)
 
+        pop_sep2 = Gtk.Separator()
+        pop_sep2.set_margin_top(2)
+        pop_sep2.set_margin_bottom(2)
+        pop_box.append(pop_sep2)
+
+        # ── Security updates row ──────────────────────────────────────────
+        sec_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        sec_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        sec_text.set_hexpand(True)
+
+        sec_title_lbl = Gtk.Label()
+        sec_title_lbl.set_markup("<b>Always apply security updates</b>")
+        sec_title_lbl.set_xalign(0)
+        sec_text.append(sec_title_lbl)
+
+        sec_desc_lbl = Gtk.Label(
+            label="Adds 'dnf5 update --security -y' to the\n"
+                  "Containerfile. Patches known CVEs at build\n"
+                  "time before upstream images catch up."
+        )
+        sec_desc_lbl.set_xalign(0)
+        sec_desc_lbl.add_css_class("dim-label")
+        sec_text.append(sec_desc_lbl)
+
+        self._security_updates_switch = Gtk.Switch()
+        self._security_updates_switch.set_valign(Gtk.Align.CENTER)
+        self._security_updates_switch.set_active(
+            self._prefs.get("security_updates_enabled", False)
+        )
+        self._security_updates_switch.connect(
+            "state-set", self._on_security_updates_toggled
+        )
+
+        sec_row.append(sec_text)
+        sec_row.append(self._security_updates_switch)
+        pop_box.append(sec_row)
+
         prefs_popover.set_child(pop_box)
         prefs_popover.set_size_request(320, -1)
         gear_btn.set_popover(prefs_popover)
@@ -3785,6 +3827,11 @@ class WizardWindow(Gtk.ApplicationWindow):
 
     def _on_kernel_check_toggled(self, switch, state):
         self._prefs["kernel_check_enabled"] = state
+        _save_prefs(self._prefs)
+        return False
+
+    def _on_security_updates_toggled(self, switch, state):
+        self._prefs["security_updates_enabled"] = state
         _save_prefs(self._prefs)
         return False
 
