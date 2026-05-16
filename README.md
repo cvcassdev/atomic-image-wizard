@@ -92,7 +92,7 @@ commands, no rpm-ostree layering. Your image, your configuration, managed locall
 **One-liner — no git required:**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/cvcassdev/atomic-image-wizard/main/install.sh | bash
 ```
 
 **Or clone the repo if you prefer:**
