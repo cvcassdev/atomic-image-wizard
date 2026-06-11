@@ -54,19 +54,9 @@ PRESET_REPOS = [
      "rpm --import https://packages.microsoft.com/keys/microsoft.asc && "
      "curl -fsSL https://packages.microsoft.com/yumrepos/vscode/config.repo "
      "-o /etc/yum.repos.d/vscode.repo"),
-    ("Google Chrome",
-     "curl -fsSL https://dl.google.com/linux/chrome/rpm/stable/x86_64/google-chrome.repo "
-     "-o /etc/yum.repos.d/google-chrome.repo"),
-    ("1Password",
-     "rpm --import https://downloads.1password.com/linux/keys/1password.asc && "
-     "curl -fsSL https://downloads.1password.com/linux/rpm/stable/x86_64/1password.repo "
-     "-o /etc/yum.repos.d/1password.repo"),
     ("Docker CE",
      "curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo "
      "-o /etc/yum.repos.d/docker-ce.repo"),
-    ("Brave Browser",
-     "curl -fsSL https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo "
-     "-o /etc/yum.repos.d/brave-browser.repo"),
 ]
 
 # Service name used by scx-scheds — normalised to one constant everywhere
@@ -314,20 +304,8 @@ PACKAGE_PRESETS = [
     ("VA-API utils (vainfo) [RF]",  ["libva-utils"], True, False),
     ("AMD ROCm OpenCL [RF]",    ["rocm-opencl"], False, True),
     ("Steam [RF-NF]",           ["steam"], True, True),
-    ("Qemu/KVM",                ["@virtualization"], False, False),
-#    ("htop + btop",             ["htop", "btop"], False, False),
-#    ("zsh",                     ["zsh"], False, False),
-#    ("fish shell",              ["fish"], False, False),
+    ("@virtualization",         ["@virtualization"], False, False),
     ("Distrobox",               ["distrobox"], False, False),
-#    ("fastfetch",               ["fastfetch"], False, False),
-#    ("tmux",                    ["tmux"], False, False),
-#    ("vim",                     ["vim"], False, False),
-#    ("neovim",                  ["neovim"], False, False),
-#    ("bat",                     ["bat"], False, False),
-#    ("eza",                     ["eza"], False, False),
-#    ("ripgrep",                 ["ripgrep"], False, False),
-#    ("fd-find",                 ["fd-find"], False, False),
-#    ("jq",                      ["jq"], False, False),
 ]
 
 
@@ -1889,7 +1867,17 @@ class PageRepos(Gtk.Box):
 
     def _add_custom_repo(self, *_):
         cmd = self.custom_entry.get_text().strip()
-        if cmd and cmd not in self.state.custom_repos:
+        if not cmd:
+            return
+        # Auto-complete bare curl .repo downloads that are missing the -o flag.
+        # Matches: curl -fsSL https://.../something.repo  (no -o present)
+        bare_repo = re.match(
+            r'^(curl\s+\S+\s+)(https?://\S+/([^/\s]+\.repo))$', cmd
+        )
+        if bare_repo and "-o " not in cmd:
+            flags, url, filename = bare_repo.group(1), bare_repo.group(2), bare_repo.group(3)
+            cmd = f"{flags.rstrip()}{url} -o /etc/yum.repos.d/{filename}"
+        if cmd not in self.state.custom_repos:
             self.state.custom_repos.append(cmd)
             self.custom_listbox.append(self._make_repo_row(cmd))
             self.custom_entry.set_text("")
