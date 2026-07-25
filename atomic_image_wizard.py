@@ -1990,9 +1990,11 @@ class PagePackages(Gtk.Box):
 
         self.append(make_header(
             "Step 3 — Packages",
-            "Search for packages to install or remove. Results come from the repos "
+            "Search for packages to install or remove. Install results come from the repos "
             "configured on this host — if a package requires a custom repo (e.g. Tailscale), "
-            "add it in Step 2 first, then search by name here."
+            "add it in Step 2 first, then search by name here. Remove results come straight "
+            "from this host's installed-package database (rpm -qa), so they're always current "
+            "and don't depend on repo metadata being available."
         ))
 
         self.notebook = Gtk.Notebook()
@@ -2220,10 +2222,45 @@ class PagePackages(Gtk.Box):
         self.remove_spinner.start()
 
         def work():
-            result, error = self._dnf_search(query)
+            result, error = self._installed_pkgs_search(query)
             GLib.idle_add(self._populate_remove, result, error)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _installed_pkgs_search(self, query: str) -> tuple[dict, str]:
+        """Search this host's actual installed-package database (rpm -qa)
+        instead of repo metadata. This is what you want for *removal*:
+        rpm's own db is always current, has no cache to go stale, and
+        still lists a package even if its repo is disabled, retired, or
+        just isn't indexed the way dnf5 search/repoquery expects."""
+        TIMEOUT = 10
+        q = query.strip().lower()
+
+        try:
+            out = subprocess.check_output(
+                ["rpm", "-qa", "--qf",
+                 r"%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\n"],
+                text=True, stderr=subprocess.DEVNULL, timeout=TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            return {}, "Reading the installed-package database timed out."
+        except FileNotFoundError:
+            return {}, "rpm was not found. Is this running on an RPM-based host?"
+        except subprocess.CalledProcessError as e:
+            return {}, f"rpm -qa returned an error (exit {e.returncode})."
+
+        grouped = {}
+        for line in out.splitlines():
+            parts = line.strip().split("\t", 2)
+            if len(parts) != 3:
+                continue
+            name, ver, summary = (p.strip() for p in parts)
+            if q and q not in name.lower() and q not in summary.lower():
+                continue
+            grouped.setdefault(name, []).append((ver, "installed", summary))
+
+        limited = dict(list(grouped.items())[:60])
+        return limited, ""
 
     def _dnf_search(self, query: str) -> tuple[dict, str]:
         TIMEOUT = 15
