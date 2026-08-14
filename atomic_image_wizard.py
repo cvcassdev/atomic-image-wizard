@@ -239,17 +239,9 @@ def _fetch_presets_from_registry() -> list[str] | None:
     ublue = [
         _UBLUE_HEADER,
         "ghcr.io/ublue-os/aurora:stable",
-        "ghcr.io/ublue-os/aurora:stable-daily",
         "ghcr.io/ublue-os/aurora:latest",
         "ghcr.io/ublue-os/aurora-nvidia-open:stable",
-        "ghcr.io/ublue-os/aurora-nvidia-open:stable-daily",
         "ghcr.io/ublue-os/aurora-nvidia-open:latest",
-        "ghcr.io/ublue-os/aurora-dx:stable",
-        "ghcr.io/ublue-os/aurora-dx:stable-daily",
-        "ghcr.io/ublue-os/aurora-dx:latest",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/aurora-dx-nvidia-open:latest",
         "ghcr.io/ublue-os/bazzite:stable",
         "ghcr.io/ublue-os/bazzite:latest",
         "ghcr.io/ublue-os/bazzite-nvidia-open:stable",
@@ -259,17 +251,10 @@ def _fetch_presets_from_registry() -> list[str] | None:
         "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable",
         "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:latest",
         "ghcr.io/ublue-os/bluefin:stable",
-        "ghcr.io/ublue-os/bluefin:stable-daily",
         "ghcr.io/ublue-os/bluefin:latest",
         "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-nvidia-open:stable-daily",
         "ghcr.io/ublue-os/bluefin-nvidia-open:latest",
-        "ghcr.io/ublue-os/bluefin-dx:stable",
-        "ghcr.io/ublue-os/bluefin-dx:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx:latest",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable-daily",
-        "ghcr.io/ublue-os/bluefin-dx-nvidia-open:latest",
+
     ]
     existing = set(presets)
     presets += [p for p in ublue if p not in existing]
